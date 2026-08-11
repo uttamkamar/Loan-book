@@ -1,0 +1,44 @@
+# Environment Variables & Secrets
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.env
+
+# Local Database Files & SQLite Storage
+data/*.sqlite
+data/*.sqlite-journal
+data/*.db
+*.sqlite
+
+# User Uploaded Confidential Files (Documents & Collateral Photos)
+uploads/*
+!uploads/.gitkeep
+!uploads/documents/
+uploads/documents/*
+!uploads/documents/.gitkeep
+!uploads/collateral/
+uploads/collateral/*
+!uploads/collateral/.gitkeep
+
+# Dependencies
+node_modules/
+/node_modules
+
+# Build & Compilation Output
+dist/
+build/
+
+# Logs & Debug Output
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Operating System & IDE Files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
