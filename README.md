@@ -55,7 +55,18 @@ Download complete loan ledger databases to downloadable `.xlsx` spreadsheets or 
 
 ---
 
-## 🌟 Key Features
+- **📸 Payment Proof Gallery & Lightbox (`PaymentProofGalleryModal`)**:
+  - Dedicated gallery modal for viewing, inspecting, and downloading payment transfer receipts (both initial disbursement proofs and installment payment receipts).
+  - Dark glass controls (`Zoom +`, `Zoom -`, `Reset ↺`, `Download 💾`, `Close X`) with carousel navigation and automated formatted file downloads (`<Borrower_Name>_ID<ID>_<Date>.<ext>`).
+
+- **💸 Interest-First Reducing Balance Ledger Engine**:
+  - Implements strict **Interest-First Repayment Rules**: installment cash payments automatically pay off accrued interest first before deducting remaining principal balance.
+  - Realized Earned Interest tracking accurately calculates cash profit collected across all installment repayments and settled loans.
+  - Prevents interest double-counting on active/partial loans while preserving precise **Remaining Due** and **Total Payable** metrics.
+
+- **⚡ 4-Query Batch Pre-fetching & Relational Indexing**:
+  - Solved the N+1 database query bottleneck in `GET /api/loans`. Replaced per-loan queries with **4-query batch pre-fetching** and `O(1)` hash-map indexing in memory.
+  - Embedded database indexes (`idx_inst_loan`, `idx_col_loan`, `idx_doc_loan`) on foreign key columns (`loan_id`) for both MySQL and SQLite, ensuring sub-5ms query times.
 
 - **📁 Batch Multi-File Upload Pipeline**:
   - **Agreement & ID Documents**: Upload **1 to 5 files simultaneously** in a single file picker step (`LoanFormModal` & `PaperworkModal`).
@@ -68,15 +79,6 @@ Download complete loan ledger databases to downloadable `.xlsx` spreadsheets or 
 - **🔄 Manual Status Toggle ("Mark Received" ↔ "Mark Active")**:
   - Direct status toggle inside the payment modal with a safety warning popup: *"Are you sure you want to mark this loan as RECEIVED?..."*
   - The ledger engine preserves manual user overrides (`received`, `forfeited`) across database syncs.
-
-- **⚡ 4-Query Batch Pre-fetching Performance Engine**:
-  - Solved the N+1 database query bottleneck in `GET /api/loans`. Replaced per-loan queries with **4-query batch pre-fetching** and `O(1)` hash-map indexing in memory.
-  - Data loading for loan lists is **90% to 95% faster** (~5ms execution times).
-
-- **💰 Flat & Partial Repayment Ledger Accounting**:
-  - Automatically calculates initial total payable (`Principal + Interest`).
-  - Supports partial payments: interest is paid off first, remaining payment reduces active principal balance.
-  - Automatically tracks **Original Total** vs **Current Remaining Due**.
 
 - **⏰ Tenure Extension & Penalty Rate Presets**:
   - 1-Click presets for extending remaining principal balance:
