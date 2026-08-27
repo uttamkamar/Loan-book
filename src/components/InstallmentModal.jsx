@@ -19,7 +19,15 @@ export default function InstallmentModal({
   const [principalOverride, setPrincipalOverride] = useState('');
   const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split('T')[0]);
   const [paymentMode, setPaymentMode] = useState('Gpay');
+  const [cashAmount, setCashAmount] = useState('');
+  const [upiAmount, setUpiAmount] = useState('');
   const [remark, setRemark] = useState('');
+  const [proofFile, setProofFile] = useState(null);
+  const [proofPreview, setProofPreview] = useState('');
+
+  // Discount State (Optional % or Rupee Discount)
+  const [discountType, setDiscountType] = useState('rupee'); // 'rupee' (₹) or 'percent' (%)
+  const [discountValue, setDiscountValue] = useState('');
 
   // Tenure Extension State
   const [showExtensionSection, setShowExtensionSection] = useState(false);
@@ -37,7 +45,13 @@ export default function InstallmentModal({
     setPrincipalOverride('');
     setPaymentDate(new Date().toISOString().split('T')[0]);
     setPaymentMode('Gpay');
+    setCashAmount('');
+    setUpiAmount('');
     setRemark('');
+    setProofFile(null);
+    setProofPreview('');
+    setDiscountType('rupee');
+    setDiscountValue('');
     setShowExtensionSection(false);
     setExtensionPreset(null);
     setExtensionExtraInterest('');
@@ -52,6 +66,13 @@ export default function InstallmentModal({
   const activePrincipal = parseFloat(loan.current_principal !== undefined && loan.current_principal !== null ? loan.current_principal : loan.loan_amount) || 0;
   const currentInterestDue = parseFloat(loan.interest_amount) || 0;
   const totalPayableDue = parseFloat(loan.balance_due) || 0;
+  const totalLoanPayable = parseFloat(loan.total_amount) || (parseFloat(loan.loan_amount) + parseFloat(loan.interest_amount)) || 0;
+
+  // Discount calculation
+  const rawDiscount = parseFloat(discountValue) || 0;
+  const computedDiscountAmount = discountType === 'percent'
+    ? Math.round((totalLoanPayable * (rawDiscount / 100)) * 100) / 100
+    : rawDiscount;
 
   // Live recalculation simulation
   const numPaid = parseFloat(amountPaid) || 0;
@@ -81,30 +102,82 @@ export default function InstallmentModal({
     setAmountPaid(inst.amount_paid);
     setPrincipalOverride(inst.principal_paid > 0 ? inst.principal_paid : '');
     setPaymentDate(inst.payment_date || new Date().toISOString().split('T')[0]);
-    setPaymentMode(inst.payment_mode || 'Gpay');
+
+    let pm = inst.payment_mode || 'Gpay';
+    let cAmt = '';
+    let uAmt = '';
+    if (pm.includes('Cash + UPI')) {
+      const cashMatch = pm.match(/Cash:\s*₹?([\d,]+(?:\.\d+)?)/i);
+      const upiMatch = pm.match(/UPI:\s*₹?([\d,]+(?:\.\d+)?)/i);
+      if (cashMatch) cAmt = cashMatch[1].replace(/,/g, '');
+      if (upiMatch) uAmt = upiMatch[1].replace(/,/g, '');
+      pm = 'Cash + UPI';
+    }
+    setPaymentMode(pm);
+    setCashAmount(cAmt);
+    setUpiAmount(uAmt);
+
     setRemark(inst.remark || '');
+    setProofPreview(inst.proof_path || '');
+    setProofFile(null);
+    if (inst.discount_amount && parseFloat(inst.discount_amount) > 0) {
+      setDiscountType('rupee');
+      setDiscountValue(inst.discount_amount);
+    } else {
+      setDiscountValue('');
+    }
   };
 
   const handleCancelEdit = () => {
     setEditingInstId(null);
     setAmountPaid('');
     setPrincipalOverride('');
+    setCashAmount('');
+    setUpiAmount('');
     setRemark('');
+    setProofFile(null);
+    setProofPreview('');
+    setDiscountType('rupee');
+    setDiscountValue('');
   };
 
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!amountPaid || parseFloat(amountPaid) <= 0) return;
 
-    const payload = {
-      amount_paid: parseFloat(amountPaid),
-      principal_paid_override: principalOverride !== '' ? parseFloat(principalOverride) : null,
-      payment_date: paymentDate,
-      payment_mode: paymentMode,
-      remark: remark || `Installment`,
-      extension_interest_add: extensionExtraInterest !== '' ? parseFloat(extensionExtraInterest) : null,
-      extension_tenure: extensionTenureText || null
-    };
+    const finalDiscount = computedDiscountAmount > 0 ? computedDiscountAmount : 0;
+
+    let finalMode = paymentMode;
+    if (paymentMode === 'Cash + UPI') {
+      const c = parseFloat(cashAmount) || 0;
+      const u = parseFloat(upiAmount) || 0;
+      finalMode = `Cash + UPI (Cash: ₹${c.toLocaleString('en-IN')}, UPI: ₹${u.toLocaleString('en-IN')})`;
+    }
+
+    let payload;
+    if (proofFile) {
+      payload = new FormData();
+      payload.append('amount_paid', parseFloat(amountPaid));
+      if (principalOverride !== '') payload.append('principal_paid_override', parseFloat(principalOverride));
+      if (finalDiscount > 0) payload.append('discount_amount', finalDiscount);
+      payload.append('payment_date', paymentDate);
+      payload.append('payment_mode', finalMode);
+      payload.append('remark', remark || `Installment`);
+      if (extensionExtraInterest !== '') payload.append('extension_interest_add', parseFloat(extensionExtraInterest));
+      if (extensionTenureText) payload.append('extension_tenure', extensionTenureText);
+      payload.append('payment_proof', proofFile);
+    } else {
+      payload = {
+        amount_paid: parseFloat(amountPaid),
+        principal_paid_override: principalOverride !== '' ? parseFloat(principalOverride) : null,
+        discount_amount: finalDiscount,
+        payment_date: paymentDate,
+        payment_mode: finalMode,
+        remark: remark || `Installment`,
+        extension_interest_add: extensionExtraInterest !== '' ? parseFloat(extensionExtraInterest) : null,
+        extension_tenure: extensionTenureText || null
+      };
+    }
 
     if (editingInstId) {
       onUpdateInstallment(editingInstId, payload);
@@ -115,7 +188,13 @@ export default function InstallmentModal({
     setEditingInstId(null);
     setAmountPaid('');
     setPrincipalOverride('');
+    setCashAmount('');
+    setUpiAmount('');
     setRemark('');
+    setProofFile(null);
+    setProofPreview('');
+    setDiscountType('rupee');
+    setDiscountValue('');
   };
 
   // Status toggle handler
@@ -185,7 +264,7 @@ export default function InstallmentModal({
           padding: '1rem',
           marginBottom: '1.25rem',
           display: 'grid',
-          gridTemplateColumns: '1fr 1fr 1fr 1fr',
+          gridTemplateColumns: loan.discount_amount > 0 ? 'repeat(5, 1fr)' : 'repeat(4, 1fr)',
           gap: '0.75rem',
           textAlign: 'center'
         }}>
@@ -201,6 +280,14 @@ export default function InstallmentModal({
               +₹{currentInterestDue.toLocaleString('en-IN')}
             </div>
           </div>
+          {parseFloat(loan.discount_amount || 0) > 0 && (
+            <div>
+              <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Discount Given</div>
+              <div className="mono" style={{ fontSize: '1rem', fontWeight: 800, color: '#a855f7' }}>
+                -₹{parseFloat(loan.discount_amount).toLocaleString('en-IN')}
+              </div>
+            </div>
+          )}
           <div>
             <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Remaining Due</div>
             <div className="mono" style={{ fontSize: '1rem', fontWeight: 800, color: '#f59e0b' }}>
@@ -244,6 +331,11 @@ export default function InstallmentModal({
                   </div>
                   
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                    {parseFloat(inst.discount_amount || 0) > 0 && (
+                      <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#a855f7', background: 'rgba(168, 85, 247, 0.15)', padding: '0.15rem 0.45rem', borderRadius: '4px', border: '1px solid rgba(168, 85, 247, 0.3)' }}>
+                        🏷️ Discount: ₹{parseFloat(inst.discount_amount).toLocaleString('en-IN')}
+                      </span>
+                    )}
                     <span className="mono" style={{ fontWeight: 800, color: '#10b981' }}>
                       ₹{parseFloat(inst.amount_paid).toLocaleString('en-IN')}
                     </span>
@@ -280,6 +372,7 @@ export default function InstallmentModal({
         <form onSubmit={handleSubmit}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
             
+            {/* ROW 1: PAYMENT AMOUNT & DISCOUNT FIELD */}
             <div className="form-group">
               <label className="form-label">Payment Amount (₹) *</label>
               <input 
@@ -294,6 +387,76 @@ export default function InstallmentModal({
             </div>
 
             <div className="form-group">
+              <label className="form-label" style={{ color: '#818cf8', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                <Sparkles size={14} color="#818cf8" />
+                <span>Discount Given (Optional)</span>
+              </label>
+              <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                <input 
+                  type="number"
+                  step="any"
+                  min="0"
+                  className="form-input mono"
+                  style={{ flex: 1 }}
+                  placeholder={discountType === 'percent' ? "e.g. 5 for 5%" : "e.g. 500 for ₹500"}
+                  value={discountValue}
+                  onChange={(e) => setDiscountValue(e.target.value)}
+                />
+                <div style={{ display: 'flex', background: 'var(--bg-primary)', padding: '0.125rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', height: '42px', alignItems: 'center' }}>
+                  <button
+                    type="button"
+                    onClick={() => setDiscountType('rupee')}
+                    title="Discount in Rupee amount (₹)"
+                    style={{
+                      padding: '0.3rem 0.65rem',
+                      fontSize: '0.8rem',
+                      fontWeight: 800,
+                      borderRadius: '5px',
+                      border: 'none',
+                      cursor: 'pointer',
+                      height: '100%',
+                      background: discountType === 'rupee' ? '#6366f1' : 'transparent',
+                      color: discountType === 'rupee' ? '#ffffff' : 'var(--text-muted)',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    ₹
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDiscountType('percent')}
+                    title="Discount in Percentage (%)"
+                    style={{
+                      padding: '0.3rem 0.65rem',
+                      fontSize: '0.8rem',
+                      fontWeight: 800,
+                      borderRadius: '5px',
+                      border: 'none',
+                      cursor: 'pointer',
+                      height: '100%',
+                      background: discountType === 'percent' ? '#6366f1' : 'transparent',
+                      color: discountType === 'percent' ? '#ffffff' : 'var(--text-muted)',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    %
+                  </button>
+                </div>
+              </div>
+              {computedDiscountAmount > 0 ? (
+                <div style={{ fontSize: '0.72rem', color: '#10b981', fontWeight: 700, marginTop: '0.25rem' }}>
+                  ✓ Granting ₹{computedDiscountAmount.toLocaleString('en-IN')} discount
+                  {discountType === 'percent' ? ` (${rawDiscount}% of total)` : totalLoanPayable > 0 ? ` (~${((computedDiscountAmount / totalLoanPayable) * 100).toFixed(1)}%)` : ''}
+                </div>
+              ) : (
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+                  Optional discount requested by borrower
+                </div>
+              )}
+            </div>
+
+            {/* ROW 2: PAYMENT MODE & PAYMENT DATE */}
+            <div className="form-group">
               <label className="form-label">Payment Mode</label>
               <select 
                 className="form-select"
@@ -302,6 +465,7 @@ export default function InstallmentModal({
               >
                 <option value="Gpay">Gpay / UPI</option>
                 <option value="Cash">Cash</option>
+                <option value="Cash + UPI">Cash + UPI (Split Payment)</option>
                 <option value="PhonePe">PhonePe</option>
                 <option value="Bank Transfer">Bank Transfer</option>
                 <option value="Cheque">Cheque</option>
@@ -318,7 +482,56 @@ export default function InstallmentModal({
               />
             </div>
 
-            <div className="form-group">
+            {/* CASH + UPI SPLIT BREAKDOWN INPUTS */}
+            {paymentMode === 'Cash + UPI' && (
+              <div className="form-group" style={{ gridColumn: 'span 2', background: 'rgba(99, 102, 241, 0.08)', padding: '0.875rem', borderRadius: 'var(--radius-md)', border: '1px solid rgba(99, 102, 241, 0.3)' }}>
+                <label className="form-label" style={{ color: '#818cf8', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span>💵 + 📱 Split Installment Breakdown (Cash + UPI)</span>
+                  <span style={{ fontSize: '0.72rem', color: '#10b981' }}>Paid: ₹{(parseFloat(amountPaid) || 0).toLocaleString('en-IN')}</span>
+                </label>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginTop: '0.35rem' }}>
+                  <div>
+                    <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 600 }}>Cash Amount (₹)</label>
+                    <input 
+                      type="number"
+                      step="any"
+                      className="form-input mono"
+                      placeholder="e.g. 1000"
+                      value={cashAmount}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setCashAmount(val);
+                        if (numPaid > 0 && val !== '') {
+                          const remaining = Math.max(0, numPaid - (parseFloat(val) || 0));
+                          setUpiAmount(String(remaining));
+                        }
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 600 }}>UPI Amount (₹)</label>
+                    <input 
+                      type="number"
+                      step="any"
+                      className="form-input mono"
+                      placeholder="e.g. 1000"
+                      value={upiAmount}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setUpiAmount(val);
+                        if (numPaid > 0 && val !== '') {
+                          const remaining = Math.max(0, numPaid - (parseFloat(val) || 0));
+                          setCashAmount(String(remaining));
+                        }
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ROW 3: REMARK / NOTES */}
+            <div className="form-group" style={{ gridColumn: 'span 2' }}>
               <label className="form-label">Remark / Notes</label>
               <input 
                 type="text"
@@ -327,6 +540,44 @@ export default function InstallmentModal({
                 value={remark}
                 onChange={(e) => setRemark(e.target.value)}
               />
+            </div>
+
+            {/* PAYMENT PROOF FIELD (REQUIRED FOR ONLINE, NO PROOF FOR CASH) */}
+            <div className="form-group" style={{ gridColumn: 'span 2' }}>
+              {(paymentMode || '').toLowerCase() !== 'cash' ? (
+                <div style={{ background: 'rgba(16, 185, 129, 0.08)', padding: '0.875rem', borderRadius: 'var(--radius-md)', border: '1px solid rgba(16, 185, 129, 0.3)' }}>
+                  <label className="form-label" style={{ color: '#10b981', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span>Upload Payment Proof (Online Transaction)</span>
+                    <span style={{ fontSize: '0.72rem', color: '#10b981' }}>Required for online transfers</span>
+                  </label>
+                  <input 
+                    type="file" 
+                    accept="image/*,application/pdf"
+                    className="form-input"
+                    onChange={(e) => {
+                      const file = e.target.files[0];
+                      if (file) {
+                        setProofFile(file);
+                        if (file.type.startsWith('image/')) {
+                          setProofPreview(URL.createObjectURL(file));
+                        }
+                      }
+                    }}
+                  />
+                  {proofPreview && (
+                    <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                      <img src={proofPreview} alt="Proof preview" style={{ width: '60px', height: '60px', objectFit: 'cover', borderRadius: '6px', border: '1px solid var(--accent-neon)' }} />
+                      <span style={{ fontSize: '0.75rem', color: '#10b981', fontWeight: 600 }}>
+                        ✓ Payment proof attached
+                      </span>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div style={{ background: 'rgba(245, 158, 11, 0.08)', padding: '0.75rem 0.875rem', borderRadius: 'var(--radius-md)', border: '1px solid rgba(245, 158, 11, 0.3)', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                  💵 <strong>Cash Transaction:</strong> No payment proof required.
+                </div>
+              )}
             </div>
 
           </div>

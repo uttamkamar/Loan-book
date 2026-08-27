@@ -18,20 +18,39 @@ export default function LoanFormModal({ isOpen, onClose, onSubmit, initialData =
     collateral_estimated_value: ''
   });
 
+  const [wantCollateral, setWantCollateral] = useState(true);
+  const [cashAmount, setCashAmount] = useState('');
+  const [upiAmount, setUpiAmount] = useState('');
+
   const [documentFiles, setDocumentFiles] = useState([]);
   const [collateralPhotos, setCollateralPhotos] = useState([]);
   const [photoPreviews, setPhotoPreviews] = useState([]);
+  const [paymentProofFile, setPaymentProofFile] = useState(null);
+  const [paymentProofPreview, setPaymentProofPreview] = useState('');
 
   const [tenureUnit, setTenureUnit] = useState('/Month');
   const [tenureCount, setTenureCount] = useState('1');
 
   useEffect(() => {
     if (initialData) {
+      let pm = initialData.payment_mode || 'Gpay';
+      let cAmt = '';
+      let uAmt = '';
+      if (pm.includes('Cash + UPI')) {
+        const cashMatch = pm.match(/Cash:\s*₹?([\d,]+(?:\.\d+)?)/i);
+        const upiMatch = pm.match(/UPI:\s*₹?([\d,]+(?:\.\d+)?)/i);
+        if (cashMatch) cAmt = cashMatch[1].replace(/,/g, '');
+        if (upiMatch) uAmt = upiMatch[1].replace(/,/g, '');
+        pm = 'Cash + UPI';
+      }
+      setCashAmount(cAmt);
+      setUpiAmount(uAmt);
+
       setFormData({
         loan_taker: initialData.loan_taker || '',
         guarantor_name: initialData.guarantor_name || '',
         loan_amount: initialData.loan_amount || '',
-        payment_mode: initialData.payment_mode || 'Gpay',
+        payment_mode: pm,
         interest_rate: initialData.interest_rate || '15',
         urgent_fee: initialData.urgent_fee || '',
         interest_tenure: initialData.interest_tenure || '/Month',
@@ -42,6 +61,14 @@ export default function LoanFormModal({ isOpen, onClose, onSubmit, initialData =
         collateral_description: initialData.collaterals?.[0]?.description || '',
         collateral_estimated_value: initialData.collaterals?.[0]?.estimated_value || ''
       });
+
+      const initialAmt = parseFloat(initialData.loan_amount) || 0;
+      setWantCollateral(
+        initialData.requires_collateral === 1 || 
+        (initialData.collaterals && initialData.collaterals.length > 0) ||
+        (initialData.documents && initialData.documents.length > 0) ||
+        !(initialData.remark || '').includes('[HIGH RISK]')
+      );
 
       // Parse tenure unit and count from existing tenure string if available
       const tenureStr = initialData.interest_tenure || '/Month';
@@ -65,6 +92,8 @@ export default function LoanFormModal({ isOpen, onClose, onSubmit, initialData =
       setDocumentFiles([]);
       setCollateralPhotos([]);
       setPhotoPreviews([]);
+      setPaymentProofFile(null);
+      setPaymentProofPreview(initialData.proof_path || '');
     } else {
       setFormData({
         loan_taker: '',
@@ -86,6 +115,8 @@ export default function LoanFormModal({ isOpen, onClose, onSubmit, initialData =
       setDocumentFiles([]);
       setCollateralPhotos([]);
       setPhotoPreviews([]);
+      setPaymentProofFile(null);
+      setPaymentProofPreview('');
     }
   }, [initialData, isOpen]);
 
@@ -208,9 +239,28 @@ export default function LoanFormModal({ isOpen, onClose, onSubmit, initialData =
       ? getDerivedTenureText(tenureUnit, tenureCount, formData.interest_rate) 
       : formData.interest_tenure;
 
-    // Store total effective rate in interest_rate
+    let finalPaymentMode = formData.payment_mode;
+    if (formData.payment_mode === 'Cash + UPI') {
+      const c = parseFloat(cashAmount) || 0;
+      const u = parseFloat(upiAmount) || 0;
+      finalPaymentMode = `Cash + UPI (Cash: ₹${c.toLocaleString('en-IN')}, UPI: ₹${u.toLocaleString('en-IN')})`;
+    }
+
+    const isHighValueLoan = numAmount >= 30000;
+    const reqCollateral = isHighValueLoan ? (wantCollateral ? 1 : 0) : (formData.collateral_item_name ? 1 : 0);
+    const riskTag = (isHighValueLoan && !wantCollateral) ? 'High Risk' : 'Normal';
+
+    let finalRemark = formData.remark || '';
+    if (isHighValueLoan && !wantCollateral && !finalRemark.includes('[HIGH RISK]')) {
+      finalRemark = `[HIGH RISK] ${finalRemark}`.trim();
+    }
+
     const finalPayload = {
       ...formData,
+      payment_mode: finalPaymentMode,
+      requires_collateral: reqCollateral,
+      risk_level: riskTag,
+      remark: finalRemark,
       interest_rate: numTotalRate,
       interest_tenure: formattedTenure
     };
@@ -219,16 +269,24 @@ export default function LoanFormModal({ isOpen, onClose, onSubmit, initialData =
       payload.append(key, finalPayload[key]);
     });
 
-    documentFiles.forEach(file => {
-      payload.append('document_files', file);
-    });
+    if (paymentProofFile) {
+      payload.append('payment_proof', paymentProofFile);
+    }
 
-    collateralPhotos.forEach(file => {
-      payload.append('collateral_photos', file);
-    });
+    if (isHighValueLoan && wantCollateral) {
+      documentFiles.forEach(file => {
+        payload.append('document_files', file);
+      });
+
+      collateralPhotos.forEach(file => {
+        payload.append('collateral_photos', file);
+      });
+    }
 
     onSubmit(payload);
   };
+
+  const isOnlinePayment = (formData.payment_mode || '').toLowerCase() !== 'cash';
 
   return (
     <div className="modal-overlay">
@@ -302,10 +360,97 @@ export default function LoanFormModal({ isOpen, onClose, onSubmit, initialData =
               >
                 <option value="Gpay">Gpay / UPI</option>
                 <option value="Cash">Cash</option>
+                <option value="Cash + UPI">Cash + UPI (Split Payment)</option>
                 <option value="PhonePe">PhonePe</option>
                 <option value="Bank Transfer">Bank Transfer</option>
                 <option value="Cheque">Cheque</option>
               </select>
+            </div>
+
+            {/* CASH + UPI SPLIT BREAKDOWN INPUTS */}
+            {formData.payment_mode === 'Cash + UPI' && (
+              <div className="form-group" style={{ gridColumn: 'span 2', background: 'rgba(99, 102, 241, 0.08)', padding: '0.875rem', borderRadius: 'var(--radius-md)', border: '1px solid rgba(99, 102, 241, 0.3)' }}>
+                <label className="form-label" style={{ color: '#818cf8', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span>💵 + 📱 Split Payment Breakdown (Cash + UPI)</span>
+                  <span style={{ fontSize: '0.72rem', color: '#10b981' }}>Total: ₹{numAmount.toLocaleString('en-IN')}</span>
+                </label>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginTop: '0.35rem' }}>
+                  <div>
+                    <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 600 }}>Cash Amount (₹)</label>
+                    <input 
+                      type="number"
+                      step="any"
+                      className="form-input mono"
+                      placeholder="e.g. 2000"
+                      value={cashAmount}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setCashAmount(val);
+                        if (numAmount > 0 && val !== '') {
+                          const remaining = Math.max(0, numAmount - (parseFloat(val) || 0));
+                          setUpiAmount(String(remaining));
+                        }
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 600 }}>UPI Amount (₹)</label>
+                    <input 
+                      type="number"
+                      step="any"
+                      className="form-input mono"
+                      placeholder="e.g. 3000"
+                      value={upiAmount}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setUpiAmount(val);
+                        if (numAmount > 0 && val !== '') {
+                          const remaining = Math.max(0, numAmount - (parseFloat(val) || 0));
+                          setCashAmount(String(remaining));
+                        }
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* PAYMENT PROOF SECTION FOR ONLINE TRANSACTION vs CASH */}
+            <div className="form-group" style={{ gridColumn: 'span 2' }}>
+              {isOnlinePayment ? (
+                <div style={{ background: 'rgba(99, 102, 241, 0.08)', padding: '0.875rem', borderRadius: 'var(--radius-md)', border: '1px solid rgba(99, 102, 241, 0.3)' }}>
+                  <label className="form-label" style={{ color: '#818cf8', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span>Upload Payment Proof (Online Transaction)</span>
+                    <span style={{ fontSize: '0.72rem', color: '#10b981' }}>Required for online transfers</span>
+                  </label>
+                  <input 
+                    type="file" 
+                    accept="image/*,application/pdf"
+                    className="form-input"
+                    onChange={(e) => {
+                      const file = e.target.files[0];
+                      if (file) {
+                        setPaymentProofFile(file);
+                        if (file.type.startsWith('image/')) {
+                          setPaymentProofPreview(URL.createObjectURL(file));
+                        }
+                      }
+                    }}
+                  />
+                  {paymentProofPreview && (
+                    <div style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                      <img src={paymentProofPreview} alt="Payment Proof Preview" style={{ width: '60px', height: '60px', objectFit: 'cover', borderRadius: '6px', border: '1px solid var(--accent-neon)' }} />
+                      <span style={{ fontSize: '0.75rem', color: '#10b981', fontWeight: 600 }}>
+                        ✓ Proof file selected
+                      </span>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div style={{ background: 'rgba(245, 158, 11, 0.08)', padding: '0.75rem 0.875rem', borderRadius: 'var(--radius-md)', border: '1px solid rgba(245, 158, 11, 0.3)', fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                  💵 <strong>Cash Transaction:</strong> No payment proof required.
+                </div>
+              )}
             </div>
 
             {/* QUICK PRESETS TEASER BUTTONS */}
@@ -517,114 +662,157 @@ export default function LoanFormModal({ isOpen, onClose, onSubmit, initialData =
             {/* PAPERWORK & COLLATERAL SECTIONS ONLY FOR LOANS >= 30,000 */}
             {isHighValue ? (
               <>
-                {/* Paperwork Upload (1 to 5 files at once) */}
-                <div className="form-group" style={{ gridColumn: 'span 2', borderTop: '1px solid var(--border-color)', paddingTop: '1rem' }}>
-                  <label className="form-label" style={{ color: '#6366f1', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <span>Upload Agreement / ID Documents (&ge; 30k)</span>
-                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Upload 1-5 files at once</span>
-                  </label>
-                  <input 
-                    type="file" 
-                    multiple
-                    accept="image/*,application/pdf"
-                    className="form-input"
-                    onChange={handleDocumentChange}
-                  />
-                  {documentFiles.length > 0 && (
-                    <div style={{ marginTop: '0.5rem', fontSize: '0.75rem', color: '#10b981' }}>
-                      <strong>{documentFiles.length} file(s) selected:</strong>
-                      <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', marginTop: '0.25rem' }}>
-                        {documentFiles.map((f, i) => (
-                          <span key={i} style={{ background: 'rgba(16, 185, 129, 0.15)', padding: '0.15rem 0.45rem', borderRadius: '4px', border: '1px solid rgba(16, 185, 129, 0.3)' }}>
-                            {f.name}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* COLLATERAL SECTION FOR HIGH VALUE (>= 30K) LOANS */}
+                {/* HIGH VALUE TOGGLE CONTROL BOX */}
                 <div style={{
                   gridColumn: 'span 2',
-                  padding: '1.25rem',
-                  background: 'rgba(168, 85, 247, 0.08)',
-                  borderRadius: 'var(--radius-lg)',
-                  border: '1px solid rgba(168, 85, 247, 0.4)'
+                  padding: '1rem 1.25rem',
+                  background: wantCollateral ? 'rgba(168, 85, 247, 0.08)' : 'rgba(239, 68, 68, 0.1)',
+                  borderRadius: 'var(--radius-md)',
+                  border: wantCollateral ? '1px solid rgba(168, 85, 247, 0.4)' : '1px solid rgba(239, 68, 68, 0.4)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '1rem'
                 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <ShieldAlert size={18} color="#a855f7" />
-                      <h3 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-primary)' }}>
-                        Security Collateral Vault <span className="badge badge-highvalue" style={{ marginLeft: '0.5rem' }}>Required (&ge; 30k)</span>
-                      </h3>
+                  <div>
+                    <div style={{ fontWeight: 800, fontSize: '0.9rem', color: wantCollateral ? '#a855f7' : '#ef4444', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                      <ShieldAlert size={18} />
+                      <span>High Value Security Check (&ge; ₹30,000)</span>
                     </div>
+                    <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: '0.25rem 0 0 0' }}>
+                      {wantCollateral 
+                        ? 'Paperwork upload & pledged collateral options are active for this loan.' 
+                        : 'Collateral & Paperwork skipped. This loan entry will be labeled as HIGH RISK.'}
+                    </p>
                   </div>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', cursor: 'pointer', userSelect: 'none', fontWeight: 700, fontSize: '0.825rem', whiteSpace: 'nowrap', background: 'var(--bg-primary)', padding: '0.4rem 0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>
+                    <span>Require Paperwork & Collateral?</span>
+                    <input 
+                      type="checkbox"
+                      style={{ width: '18px', height: '18px', cursor: 'pointer', accentColor: '#a855f7' }}
+                      checked={wantCollateral}
+                      onChange={(e) => setWantCollateral(e.target.checked)}
+                    />
+                  </label>
+                </div>
 
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                    <div className="form-group">
-                      <label className="form-label">Pledged Collateral Item Name</label>
-                      <input 
-                        type="text" 
-                        className="form-input"
-                        placeholder="e.g. Gold Necklace, iPhone 15 Pro, Bike R/C"
-                        value={formData.collateral_item_name}
-                        onChange={(e) => setFormData({ ...formData, collateral_item_name: e.target.value })}
-                      />
-                    </div>
-
-                    <div className="form-group">
-                      <label className="form-label">Estimated Valuation (₹)</label>
-                      <input 
-                        type="number" 
-                        step="any"
-                        className="form-input mono"
-                        placeholder="e.g. 50000"
-                        value={formData.collateral_estimated_value}
-                        onChange={(e) => setFormData({ ...formData, collateral_estimated_value: e.target.value })}
-                      />
-                    </div>
-
-                    <div className="form-group" style={{ gridColumn: 'span 2' }}>
-                      <label className="form-label">Collateral Description & Physical Condition</label>
-                      <input 
-                        type="text" 
-                        className="form-input"
-                        placeholder="e.g. 22K Gold 10g with bill, Sealed box phone with IMEI"
-                        value={formData.collateral_description}
-                        onChange={(e) => setFormData({ ...formData, collateral_description: e.target.value })}
-                      />
-                    </div>
-
-                    {/* MULTIPLE COLLATERAL SECURITY PHOTOS (1 to 10 AT ONCE) */}
-                    <div className="form-group" style={{ gridColumn: 'span 2' }}>
-                      <label className="form-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span>Upload Collateral Security Photos</span>
-                        <span style={{ fontSize: '0.72rem', color: '#a855f7' }}>Upload 1-10 photos at once</span>
+                {wantCollateral ? (
+                  <>
+                    {/* Paperwork Upload (1 to 5 files at once) */}
+                    <div className="form-group" style={{ gridColumn: 'span 2', borderTop: '1px solid var(--border-color)', paddingTop: '1rem' }}>
+                      <label className="form-label" style={{ color: '#6366f1', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <span>Upload Agreement / ID Documents (&ge; 30k)</span>
+                        <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Upload 1-5 files at once</span>
                       </label>
                       <input 
                         type="file" 
                         multiple
-                        accept="image/*"
+                        accept="image/*,application/pdf"
                         className="form-input"
-                        onChange={handlePhotosChange}
+                        onChange={handleDocumentChange}
                       />
-                      {photoPreviews.length > 0 && (
-                        <div style={{ marginTop: '0.6rem' }}>
-                          <div style={{ fontSize: '0.75rem', color: '#10b981', marginBottom: '0.4rem' }}>
-                            <strong>{photoPreviews.length} photo(s) selected:</strong>
-                          </div>
-                          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                            {photoPreviews.map((src, idx) => (
-                              <img key={idx} src={src} alt={`Preview ${idx + 1}`} style={{ width: '60px', height: '60px', objectFit: 'cover', borderRadius: '8px', border: '1px solid var(--accent-purple)' }} />
+                      {documentFiles.length > 0 && (
+                        <div style={{ marginTop: '0.5rem', fontSize: '0.75rem', color: '#10b981' }}>
+                          <strong>{documentFiles.length} file(s) selected:</strong>
+                          <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', marginTop: '0.25rem' }}>
+                            {documentFiles.map((f, i) => (
+                              <span key={i} style={{ background: 'rgba(16, 185, 129, 0.15)', padding: '0.15rem 0.45rem', borderRadius: '4px', border: '1px solid rgba(16, 185, 129, 0.3)' }}>
+                                {f.name}
+                              </span>
                             ))}
                           </div>
                         </div>
                       )}
                     </div>
 
+                    {/* COLLATERAL SECTION FOR HIGH VALUE (>= 30K) LOANS */}
+                    <div style={{
+                      gridColumn: 'span 2',
+                      padding: '1.25rem',
+                      background: 'rgba(168, 85, 247, 0.08)',
+                      borderRadius: 'var(--radius-lg)',
+                      border: '1px solid rgba(168, 85, 247, 0.4)'
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <ShieldAlert size={18} color="#a855f7" />
+                          <h3 style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                            Security Collateral Vault <span className="badge badge-highvalue" style={{ marginLeft: '0.5rem' }}>Active (&ge; 30k)</span>
+                          </h3>
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                        <div className="form-group">
+                          <label className="form-label">Pledged Collateral Item Name</label>
+                          <input 
+                            type="text" 
+                            className="form-input"
+                            placeholder="e.g. Gold Necklace, iPhone 15 Pro, Bike R/C"
+                            value={formData.collateral_item_name}
+                            onChange={(e) => setFormData({ ...formData, collateral_item_name: e.target.value })}
+                          />
+                        </div>
+
+                        <div className="form-group">
+                          <label className="form-label">Estimated Valuation (₹)</label>
+                          <input 
+                            type="number" 
+                            step="any"
+                            className="form-input mono"
+                            placeholder="e.g. 50000"
+                            value={formData.collateral_estimated_value}
+                            onChange={(e) => setFormData({ ...formData, collateral_estimated_value: e.target.value })}
+                          />
+                        </div>
+
+                        <div className="form-group" style={{ gridColumn: 'span 2' }}>
+                          <label className="form-label">Collateral Description & Physical Condition</label>
+                          <input 
+                            type="text" 
+                            className="form-input"
+                            placeholder="e.g. 22K Gold 10g with bill, Sealed box phone with IMEI"
+                            value={formData.collateral_description}
+                            onChange={(e) => setFormData({ ...formData, collateral_description: e.target.value })}
+                          />
+                        </div>
+
+                        {/* MULTIPLE COLLATERAL SECURITY PHOTOS (1 to 10 AT ONCE) */}
+                        <div className="form-group" style={{ gridColumn: 'span 2' }}>
+                          <label className="form-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <span>Upload Collateral Security Photos</span>
+                            <span style={{ fontSize: '0.72rem', color: '#a855f7' }}>Upload 1-10 photos at once</span>
+                          </label>
+                          <input 
+                            type="file" 
+                            multiple
+                            accept="image/*"
+                            className="form-input"
+                            onChange={handlePhotosChange}
+                          />
+                          {photoPreviews.length > 0 && (
+                            <div style={{ marginTop: '0.6rem' }}>
+                              <div style={{ fontSize: '0.75rem', color: '#10b981', marginBottom: '0.4rem' }}>
+                                <strong>{photoPreviews.length} photo(s) selected:</strong>
+                              </div>
+                              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                {photoPreviews.map((src, idx) => (
+                                  <img key={idx} src={src} alt={`Preview ${idx + 1}`} style={{ width: '60px', height: '60px', objectFit: 'cover', borderRadius: '8px', border: '1px solid var(--accent-purple)' }} />
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ gridColumn: 'span 2', background: 'rgba(239, 68, 68, 0.08)', padding: '0.875rem 1rem', borderRadius: 'var(--radius-md)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#ef4444', fontSize: '0.8rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <ShieldAlert size={16} />
+                    <span>Notice: Normal entry mode without security collateral. This loan will be tagged as <strong>HIGH RISK</strong>.</span>
                   </div>
-                </div>
+                )}
               </>
             ) : null}
 

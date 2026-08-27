@@ -48,8 +48,15 @@ async function initDatabase() {
       await pool.query(`UPDATE loans SET current_principal = loan_amount WHERE current_principal = 0 OR current_principal IS NULL;`);
       await pool.query(`ALTER TABLE loans ADD COLUMN interest_type VARCHAR(50) DEFAULT 'reducing';`);
       await pool.query(`ALTER TABLE loans ADD COLUMN guarantor_name VARCHAR(255) DEFAULT NULL;`);
+      await pool.query(`ALTER TABLE loans ADD COLUMN proof_path VARCHAR(500) DEFAULT NULL;`);
+      await pool.query(`ALTER TABLE loans ADD COLUMN discount_amount DECIMAL(12,2) DEFAULT 0.00;`);
       await pool.query(`ALTER TABLE installments ADD COLUMN principal_paid DECIMAL(12,2) DEFAULT 0.00;`);
       await pool.query(`ALTER TABLE installments ADD COLUMN interest_paid DECIMAL(12,2) DEFAULT 0.00;`);
+      await pool.query(`ALTER TABLE installments ADD COLUMN discount_amount DECIMAL(12,2) DEFAULT 0.00;`);
+      await pool.query(`ALTER TABLE installments ADD COLUMN proof_path VARCHAR(500) DEFAULT NULL;`);
+      await pool.query(`CREATE INDEX idx_inst_loan ON installments(loan_id);`);
+      await pool.query(`CREATE INDEX idx_col_loan ON collateral_items(loan_id);`);
+      await pool.query(`CREATE INDEX idx_doc_loan ON documents(loan_id);`);
     } catch (e) {
       // Ignore columns already exist error
     }
@@ -82,6 +89,7 @@ async function initDatabase() {
         total_amount REAL DEFAULT 0.00,
         balance_due REAL DEFAULT 0.00,
         status TEXT DEFAULT 'active',
+        proof_path TEXT,
         remark TEXT,
         requires_collateral INTEGER DEFAULT 0,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -100,6 +108,7 @@ async function initDatabase() {
         interest_paid REAL DEFAULT 0.00,
         payment_mode TEXT DEFAULT 'Gpay',
         remaining_balance REAL NOT NULL,
+        proof_path TEXT,
         remark TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (loan_id) REFERENCES loans(id) ON DELETE CASCADE
@@ -111,8 +120,15 @@ async function initDatabase() {
     try { await runSqliteQuery(`UPDATE loans SET current_principal = loan_amount WHERE current_principal = 0 OR current_principal IS NULL;`); } catch(e){}
     try { await runSqliteQuery(`ALTER TABLE loans ADD COLUMN interest_type TEXT DEFAULT 'reducing';`); } catch(e){}
     try { await runSqliteQuery(`ALTER TABLE loans ADD COLUMN guarantor_name TEXT DEFAULT NULL;`); } catch(e){}
+    try { await runSqliteQuery(`ALTER TABLE loans ADD COLUMN proof_path TEXT;`); } catch(e){}
+    try { await runSqliteQuery(`ALTER TABLE loans ADD COLUMN discount_amount REAL DEFAULT 0.00;`); } catch(e){}
     try { await runSqliteQuery(`ALTER TABLE installments ADD COLUMN principal_paid REAL DEFAULT 0.00;`); } catch(e){}
     try { await runSqliteQuery(`ALTER TABLE installments ADD COLUMN interest_paid REAL DEFAULT 0.00;`); } catch(e){}
+    try { await runSqliteQuery(`ALTER TABLE installments ADD COLUMN discount_amount REAL DEFAULT 0.00;`); } catch(e){}
+    try { await runSqliteQuery(`ALTER TABLE installments ADD COLUMN proof_path TEXT;`); } catch(e){}
+    try { await runSqliteQuery(`CREATE INDEX IF NOT EXISTS idx_inst_loan ON installments(loan_id);`); } catch(e){}
+    try { await runSqliteQuery(`CREATE INDEX IF NOT EXISTS idx_col_loan ON collateral_items(loan_id);`); } catch(e){}
+    try { await runSqliteQuery(`CREATE INDEX IF NOT EXISTS idx_doc_loan ON documents(loan_id);`); } catch(e){}
 
     await runSqliteQuery(`
       CREATE TABLE IF NOT EXISTS collateral_items (

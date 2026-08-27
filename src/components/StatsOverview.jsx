@@ -1,12 +1,35 @@
 import React from 'react';
 import { DollarSign, TrendingUp, ShieldCheck, CheckCircle2, Receipt } from 'lucide-react';
 
+// Helper to calculate exact interest actually received in cash for a loan
+function calculateEarnedInterest(loan) {
+  if (!loan) return 0;
+  const principal = parseFloat(loan.loan_amount) || 0;
+  const installments = loan.installments || [];
+
+  if (installments.length > 0) {
+    const totalPaid = installments.reduce((acc, i) => acc + (parseFloat(i.amount_paid) || 0), 0);
+    if (loan.status === 'received' || totalPaid >= principal) {
+      return Math.max(0, totalPaid - principal);
+    }
+    const rate = parseFloat(loan.interest_rate) || 0;
+    const initialInterest = Math.round((principal * (rate / 100)) * 100) / 100;
+    return Math.min(totalPaid, initialInterest);
+  } else if (loan.status === 'received') {
+    const origTot = parseFloat(loan.total_amount) || (principal + (parseFloat(loan.interest_amount) || 0));
+    const disc = parseFloat(loan.discount_amount) || 0;
+    const totalPaid = Math.max(0, origTot - disc);
+    return Math.max(0, totalPaid - principal);
+  }
+
+  return 0;
+}
+
 export default function StatsOverview({ loans = [], isGlobalPrivacyOn = false }) {
   const totalPrincipal = loans.reduce((acc, l) => acc + (parseFloat(l.loan_amount) || 0), 0);
   
-  // Total Interest RECEIVED (only from settled / received loans)
-  const receivedLoans = loans.filter(l => l.status === 'received');
-  const totalReceivedInterest = receivedLoans.reduce((acc, l) => acc + (parseFloat(l.interest_amount) || 0), 0);
+  // Total Interest ACTUALLY RECEIVED so far (from installment payments & settled loans)
+  const totalReceivedInterest = loans.reduce((acc, l) => acc + calculateEarnedInterest(l), 0);
   
   // Pending Interest (from active & partial loans)
   const pendingLoans = loans.filter(l => l.status === 'active' || l.status === 'partial');
@@ -15,8 +38,8 @@ export default function StatsOverview({ loans = [], isGlobalPrivacyOn = false })
   const totalBalanceDue = loans.reduce((acc, l) => acc + (parseFloat(l.balance_due) || 0), 0);
   
   const activeCount = pendingLoans.length;
-  const receivedCount = receivedLoans.length;
-  const highValueCount = loans.filter(l => l.requires_collateral || l.loan_amount > 30000).length;
+  const receivedCount = loans.filter(l => l.status === 'received').length;
+  const highValueCount = loans.filter(l => l.requires_collateral || parseFloat(l.loan_amount) >= 30000).length;
   const pledgedCollaterals = loans.reduce((acc, l) => acc + (l.collaterals?.length || 0), 0);
 
   const formatCurrency = (val) => {

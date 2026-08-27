@@ -8,6 +8,7 @@ import CollateralGalleryModal from './components/CollateralGalleryModal';
 import PaperworkModal from './components/PaperworkModal';
 import ExcelModal from './components/ExcelModal';
 import FullLoanDetailsModal from './components/FullLoanDetailsModal';
+import PaymentProofGalleryModal from './components/PaymentProofGalleryModal';
 
 import { 
   fetchHealth, 
@@ -40,6 +41,8 @@ export default function App() {
   const [activeInstallmentLoan, setActiveInstallmentLoan] = useState(null);
   const [activeCollateralLoan, setActiveCollateralLoan] = useState(null);
   const [activePaperworkLoan, setActivePaperworkLoan] = useState(null);
+  const [activeProofLoan, setActiveProofLoan] = useState(null);
+  const [activeProofIndex, setActiveProofIndex] = useState(0);
   const [activeFullDetailsLoanId, setActiveFullDetailsLoanId] = useState(null);
   const [isExcelModalOpen, setIsExcelModalOpen] = useState(false);
 
@@ -238,6 +241,10 @@ export default function App() {
           onOpenInstallmentModal={(loan) => setActiveInstallmentLoan(loan)}
           onOpenCollateralModal={(loan) => setActiveCollateralLoan(loan)}
           onOpenPaperworkModal={(loan) => setActivePaperworkLoan(loan)}
+          onOpenProofModal={(loan, index = 0) => {
+            setActiveProofLoan(loan);
+            setActiveProofIndex(index);
+          }}
           onOpenFullDetailsModal={(loan) => setActiveFullDetailsLoanId(loan.id)}
           onEditLoan={(loan) => {
             setEditingLoan(loan);
@@ -291,6 +298,17 @@ export default function App() {
         loan={activeFullDetailsLoan}
         onOpenInstallmentModal={(loan) => setActiveInstallmentLoan(loan)}
         onOpenCollateralModal={(loan) => setActiveCollateralLoan(loan)}
+        onOpenProofModal={(loan, index = 0) => {
+          setActiveProofLoan(loan);
+          setActiveProofIndex(index);
+        }}
+      />
+
+      <PaymentProofGalleryModal 
+        isOpen={!!activeProofLoan}
+        onClose={() => setActiveProofLoan(null)}
+        loan={activeProofLoan}
+        initialIndex={activeProofIndex}
       />
 
       <ExcelModal 

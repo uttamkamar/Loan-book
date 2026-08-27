@@ -54,7 +54,9 @@ async function cleanOrphanedRecords() {
     await query(`DELETE FROM collateral_items WHERE loan_id NOT IN (SELECT id FROM loans)`);
     await query(`DELETE FROM documents WHERE loan_id NOT IN (SELECT id FROM loans)`);
 
-    // Normalize all existing loan ledger records
+    // Normalize all existing loan ledger records (clear un-overridden legacy principal_paid values equal to amount_paid)
+    await query(`UPDATE installments SET principal_paid = NULL WHERE principal_paid = amount_paid`);
+
     const [allLoans] = await query(`SELECT * FROM loans`);
     for (let loan of (allLoans || [])) {
       const [insts] = await query(`SELECT * FROM installments WHERE loan_id = ? ORDER BY installment_no ASC`, [loan.id]);
@@ -254,6 +256,7 @@ app.get('/api/loans', async (req, res) => {
         ...loan,
         interest_amount: state.interestAmount,
         total_amount: state.totalAmount,
+        discount_amount: state.discountAmount,
         balance_due: state.balanceDue,
         current_principal: state.currentPrincipal,
         status: state.status,
@@ -287,6 +290,7 @@ app.get('/api/loans/:id', async (req, res) => {
       ...loan,
       interest_amount: state.interestAmount,
       total_amount: state.totalAmount,
+      discount_amount: state.discountAmount,
       balance_due: state.balanceDue,
       current_principal: state.currentPrincipal,
       status: state.status,
@@ -322,7 +326,9 @@ app.post('/api/loans', handleUploadOrJson, async (req, res) => {
     const amount = parseFloat(loan_amount) || 0;
     const rate = parseFloat(interest_rate) || 0;
     const type = interest_type || 'reducing';
-    const requiresCollateral = amount > 30000 ? 1 : 0;
+    const requiresCollateral = body.requires_collateral !== undefined 
+      ? (parseInt(body.requires_collateral, 10) || body.requires_collateral === '1' || body.requires_collateral === true ? 1 : 0) 
+      : (amount >= 30000 ? 1 : 0);
 
     const { interestAmount, totalAmount, balanceDue } = calculateLoanTotals(amount, rate, interest_tenure, type, amount);
 
@@ -338,6 +344,13 @@ app.post('/api/loans', handleUploadOrJson, async (req, res) => {
     const loanId = result.insertId;
 
     const allFiles = req.files || [];
+
+    // Handle Payment Proof for Initial Loan Disbursement
+    const proofFile = allFiles.find(f => f.fieldname === 'payment_proof' || f.fieldname === 'proof_file' || f.fieldname === 'proof');
+    if (proofFile) {
+      const proofPath = '/uploads/documents/' + proofFile.filename;
+      await query(`UPDATE loans SET proof_path = ? WHERE id = ?`, [proofPath, loanId]);
+    }
 
     // Handle Multiple Paperwork Document Uploads (up to 5)
     const docFiles = allFiles.filter(f => f.fieldname === 'document_files' || f.fieldname === 'document_file');
@@ -392,11 +405,12 @@ app.post('/api/loans', handleUploadOrJson, async (req, res) => {
   }
 });
 
-// ADD Installment Payment with Optional Tenure Extension Interest
-app.post('/api/loans/:id/installments', async (req, res) => {
+// ADD Installment Payment with Optional Tenure Extension Interest & Payment Proof
+app.post('/api/loans/:id/installments', handleUploadOrJson, async (req, res) => {
   try {
     const loanId = req.params.id;
-    const { amount_paid, principal_paid_override, payment_date, payment_mode, remark, extension_interest_add, extension_tenure } = req.body;
+    const body = req.body || {};
+    const { amount_paid, principal_paid_override, discount_amount, payment_date, payment_mode, remark, extension_interest_add, extension_tenure } = body;
 
     const [loans] = await query(`SELECT * FROM loans WHERE id = ?`, [loanId]);
     if (!loans || !loans.length) return res.status(404).json({ error: 'Loan not found' });
@@ -406,14 +420,20 @@ app.post('/api/loans/:id/installments', async (req, res) => {
     
     const installmentNo = (existingInsts.length || 0) + 1;
     const paidAmount = parseFloat(amount_paid) || 0;
+    const discountVal = parseFloat(discount_amount) || 0;
     const principalPaid = principal_paid_override !== undefined && principal_paid_override !== null && principal_paid_override !== '' 
       ? parseFloat(principal_paid_override) 
-      : paidAmount;
+      : null;
+
+    // Check if payment proof image file was uploaded
+    const allFiles = req.files || [];
+    const proofFile = allFiles.find(f => f.fieldname === 'payment_proof' || f.fieldname === 'proof_file' || f.fieldname === 'proof') || (req.file && (req.file.fieldname === 'payment_proof' || req.file.fieldname === 'proof_file' || req.file.fieldname === 'proof') ? req.file : null);
+    const proofPath = proofFile ? '/uploads/documents/' + proofFile.filename : null;
 
     // Record Installment Entry
     await query(`
-      INSERT INTO installments (loan_id, installment_no, payment_date, amount_paid, principal_paid, interest_paid, payment_mode, remaining_balance, remark)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO installments (loan_id, installment_no, payment_date, amount_paid, principal_paid, interest_paid, discount_amount, payment_mode, remaining_balance, proof_path, remark)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       loanId, 
       installmentNo, 
@@ -421,8 +441,10 @@ app.post('/api/loans/:id/installments', async (req, res) => {
       paidAmount,
       principalPaid,
       Math.max(0, paidAmount - principalPaid),
+      discountVal,
       payment_mode || 'Gpay', 
       0, 
+      proofPath,
       remark || `Installment #${installmentNo}`
     ]);
 
@@ -448,9 +470,9 @@ app.post('/api/loans/:id/installments', async (req, res) => {
 
     await query(`
       UPDATE loans
-      SET current_principal = ?, interest_amount = ?, total_amount = ?, balance_due = ?, status = ?
+      SET current_principal = ?, interest_amount = ?, total_amount = ?, discount_amount = ?, balance_due = ?, status = ?
       WHERE id = ?
-    `, [updatedState.currentPrincipal, updatedState.interestAmount, updatedState.totalAmount, updatedState.balanceDue, updatedState.status, loanId]);
+    `, [updatedState.currentPrincipal, updatedState.interestAmount, updatedState.totalAmount, updatedState.discountAmount, updatedState.balanceDue, updatedState.status, loanId]);
 
     res.json({ 
       message: 'Installment recorded & loan ledger recalculated!', 
@@ -463,11 +485,12 @@ app.post('/api/loans/:id/installments', async (req, res) => {
   }
 });
 
-// UPDATE Installment Payment (Fix mistakes)
-app.put('/api/installments/:id', async (req, res) => {
+// UPDATE Installment Payment (Fix mistakes & update proof)
+app.put('/api/installments/:id', handleUploadOrJson, async (req, res) => {
   try {
     const instId = req.params.id;
-    const { amount_paid, principal_paid_override, payment_date, payment_mode, remark } = req.body;
+    const body = req.body || {};
+    const { amount_paid, principal_paid_override, discount_amount, payment_date, payment_mode, remark } = body;
 
     const [insts] = await query(`SELECT * FROM installments WHERE id = ?`, [instId]);
     if (!insts || !insts.length) {
@@ -487,16 +510,23 @@ app.put('/api/installments/:id', async (req, res) => {
 
     const loan = loans[0];
 
+    // Check for updated payment proof image
+    const allFiles = req.files || [];
+    const proofFile = allFiles.find(f => f.fieldname === 'payment_proof' || f.fieldname === 'proof_file' || f.fieldname === 'proof') || (req.file && (req.file.fieldname === 'payment_proof' || req.file.fieldname === 'proof_file' || req.file.fieldname === 'proof') ? req.file : null);
+    const updatedProofPath = proofFile ? '/uploads/documents/' + proofFile.filename : currentInst.proof_path;
+
     // Update Installment Entry
     await query(`
       UPDATE installments
-      SET amount_paid = ?, principal_paid = ?, payment_date = ?, payment_mode = ?, remark = ?
+      SET amount_paid = ?, principal_paid = ?, discount_amount = ?, payment_date = ?, payment_mode = ?, proof_path = ?, remark = ?
       WHERE id = ?
     `, [
       parseFloat(amount_paid) || currentInst.amount_paid,
-      principal_paid_override !== undefined && principal_paid_override !== null && principal_paid_override !== '' ? parseFloat(principal_paid_override) : currentInst.principal_paid,
+      principal_paid_override !== undefined && principal_paid_override !== null && principal_paid_override !== '' ? parseFloat(principal_paid_override) : null,
+      discount_amount !== undefined && discount_amount !== null && discount_amount !== '' ? parseFloat(discount_amount) : (currentInst.discount_amount || 0),
       payment_date || currentInst.payment_date,
       payment_mode || currentInst.payment_mode,
+      updatedProofPath,
       remark !== undefined ? remark : currentInst.remark,
       instId
     ]);
@@ -507,9 +537,9 @@ app.put('/api/installments/:id', async (req, res) => {
 
     await query(`
       UPDATE loans
-      SET current_principal = ?, interest_amount = ?, total_amount = ?, balance_due = ?, status = ?
+      SET current_principal = ?, interest_amount = ?, total_amount = ?, discount_amount = ?, balance_due = ?, status = ?
       WHERE id = ?
-    `, [updatedState.currentPrincipal, updatedState.interestAmount, updatedState.totalAmount, updatedState.balanceDue, updatedState.status, loanId]);
+    `, [updatedState.currentPrincipal, updatedState.interestAmount, updatedState.totalAmount, updatedState.discountAmount, updatedState.balanceDue, updatedState.status, loanId]);
 
     res.json({ message: 'Installment updated and loan ledger recalculated!', state: updatedState });
   } catch (err) {
@@ -544,9 +574,9 @@ app.delete('/api/installments/:id', async (req, res) => {
 
     await query(`
       UPDATE loans
-      SET current_principal = ?, interest_amount = ?, total_amount = ?, balance_due = ?, status = ?
+      SET current_principal = ?, interest_amount = ?, total_amount = ?, discount_amount = ?, balance_due = ?, status = ?
       WHERE id = ?
-    `, [updatedState.currentPrincipal, updatedState.interestAmount, updatedState.totalAmount, updatedState.balanceDue, updatedState.status, loanId]);
+    `, [updatedState.currentPrincipal, updatedState.interestAmount, updatedState.totalAmount, updatedState.discountAmount, updatedState.balanceDue, updatedState.status, loanId]);
 
     res.json({ message: 'Installment deleted & loan ledger recalculated!', state: updatedState });
   } catch (err) {

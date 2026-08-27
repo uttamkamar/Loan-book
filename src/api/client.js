@@ -57,19 +57,21 @@ export async function deleteLoan(id) {
 }
 
 export async function addInstallment(loanId, installmentData) {
+  const isFormData = installmentData instanceof FormData;
   const res = await fetch(`${API_BASE}/loans/${loanId}/installments`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(installmentData)
+    headers: isFormData ? {} : { 'Content-Type': 'application/json' },
+    body: isFormData ? installmentData : JSON.stringify(installmentData)
   });
   return await parseResponse(res, 'Failed to record installment');
 }
 
 export async function updateInstallment(installmentId, installmentData) {
+  const isFormData = installmentData instanceof FormData;
   const res = await fetch(`${API_BASE}/installments/${installmentId}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(installmentData)
+    headers: isFormData ? {} : { 'Content-Type': 'application/json' },
+    body: isFormData ? installmentData : JSON.stringify(installmentData)
   });
   return await parseResponse(res, 'Failed to update installment');
 }

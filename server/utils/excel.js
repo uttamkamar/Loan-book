@@ -92,6 +92,7 @@ function generateLoansExcel(loans) {
     'Return Date': loan.return_date || '-',
     'Current Period Interest': loan.interest_amount,
     'Total Amount Payable': loan.total_amount,
+    'Discount Granted (₹)': loan.discount_amount || 0,
     'Balance Due': loan.balance_due,
     'Status': loan.status.toUpperCase(),
     'Remarks': loan.remark || '',
