@@ -1,9 +1,35 @@
 import React, { useState, useEffect } from 'react';
+import { formatTime12Hour } from '../utils/dateUtils';
 import { 
   X, DollarSign, Calendar, PlusCircle, History, Sparkles, 
   TrendingDown, Edit3, Trash2, Clock, Calculator, AlertTriangle, 
   CheckCircle2, ToggleLeft, ToggleRight 
 } from 'lucide-react';
+
+function getCurrentTimeFormatted() {
+  const now = new Date();
+  const hours = String(now.getHours()).padStart(2, '0');
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+  return `${hours}:${minutes}`;
+}
+
+function formatTimeForInput(timeStr) {
+  if (!timeStr) return getCurrentTimeFormatted();
+  const trimmed = String(timeStr).trim();
+  if (/^\d{2}:\d{2}$/.test(trimmed)) return trimmed;
+  if (/^\d{1}:\d{2}$/.test(trimmed)) return `0${trimmed}`;
+  if (/^\d{2}:\d{2}:\d{2}$/.test(trimmed)) return trimmed.substring(0, 5);
+  const match = trimmed.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i);
+  if (match) {
+    let hours = parseInt(match[1], 10);
+    const minutes = match[2];
+    const ampm = match[3] ? match[3].toUpperCase() : null;
+    if (ampm === 'PM' && hours < 12) hours += 12;
+    if (ampm === 'AM' && hours === 12) hours = 0;
+    return `${String(hours).padStart(2, '0')}:${minutes}`;
+  }
+  return trimmed;
+}
 
 export default function InstallmentModal({ 
   isOpen, 
@@ -18,6 +44,7 @@ export default function InstallmentModal({
   const [amountPaid, setAmountPaid] = useState('');
   const [principalOverride, setPrincipalOverride] = useState('');
   const [paymentDate, setPaymentDate] = useState(new Date().toISOString().split('T')[0]);
+  const [paymentTime, setPaymentTime] = useState(getCurrentTimeFormatted());
   const [paymentMode, setPaymentMode] = useState('Gpay');
   const [cashAmount, setCashAmount] = useState('');
   const [upiAmount, setUpiAmount] = useState('');
@@ -29,6 +56,10 @@ export default function InstallmentModal({
   const [discountType, setDiscountType] = useState('rupee'); // 'rupee' (₹) or 'percent' (%)
   const [discountValue, setDiscountValue] = useState('');
 
+  // Penalty State (Optional % or Rupee Penalty)
+  const [penaltyType, setPenaltyType] = useState('rupee'); // 'rupee' (₹) or 'percent' (%)
+  const [penaltyValue, setPenaltyValue] = useState('');
+
   // Tenure Extension State
   const [showExtensionSection, setShowExtensionSection] = useState(false);
   const [extensionPreset, setExtensionPreset] = useState(null);
@@ -38,12 +69,14 @@ export default function InstallmentModal({
   // Manual Status Toggle & Warning Popup State
   const [showStatusWarningModal, setShowStatusWarningModal] = useState(false);
   const [targetStatus, setTargetStatus] = useState(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     setEditingInstId(null);
     setAmountPaid('');
     setPrincipalOverride('');
     setPaymentDate(new Date().toISOString().split('T')[0]);
+    setPaymentTime(getCurrentTimeFormatted());
     setPaymentMode('Gpay');
     setCashAmount('');
     setUpiAmount('');
@@ -52,21 +85,22 @@ export default function InstallmentModal({
     setProofPreview('');
     setDiscountType('rupee');
     setDiscountValue('');
+    setPenaltyType('rupee');
+    setPenaltyValue('');
     setShowExtensionSection(false);
     setExtensionPreset(null);
     setExtensionExtraInterest('');
     setExtensionTenureText('');
     setShowStatusWarningModal(false);
     setTargetStatus(null);
+    setIsSubmitting(false);
   }, [isOpen, loan]);
 
-  if (!isOpen || !loan) return null;
-
-  const installments = loan.installments || [];
-  const activePrincipal = parseFloat(loan.current_principal !== undefined && loan.current_principal !== null ? loan.current_principal : loan.loan_amount) || 0;
-  const currentInterestDue = parseFloat(loan.interest_amount) || 0;
-  const totalPayableDue = parseFloat(loan.balance_due) || 0;
-  const totalLoanPayable = parseFloat(loan.total_amount) || (parseFloat(loan.loan_amount) + parseFloat(loan.interest_amount)) || 0;
+  const installments = loan ? (loan.installments || []) : [];
+  const activePrincipal = loan ? (parseFloat(loan.current_principal !== undefined && loan.current_principal !== null ? loan.current_principal : loan.loan_amount) || 0) : 0;
+  const currentInterestDue = loan ? (parseFloat(loan.interest_amount) || 0) : 0;
+  const totalPayableDue = loan ? (parseFloat(loan.balance_due) || 0) : 0;
+  const totalLoanPayable = loan ? (parseFloat(loan.total_amount) || (parseFloat(loan.loan_amount) + parseFloat(loan.interest_amount)) || 0) : 0;
 
   // Discount calculation
   const rawDiscount = parseFloat(discountValue) || 0;
@@ -74,17 +108,27 @@ export default function InstallmentModal({
     ? Math.round((totalLoanPayable * (rawDiscount / 100)) * 100) / 100
     : rawDiscount;
 
+  // Penalty calculation
+  const rawPenalty = parseFloat(penaltyValue) || 0;
+  const baseForPenaltyPercent = activePrincipal > 0 ? activePrincipal : totalPayableDue;
+  const computedPenaltyAmount = penaltyType === 'percent'
+    ? Math.round((baseForPenaltyPercent * (rawPenalty / 100)) * 100) / 100
+    : rawPenalty;
+
   // Live recalculation simulation
   const numPaid = parseFloat(amountPaid) || 0;
-  let simulatedPrincipalPaid = 0;
   let simulatedInterestPaid = 0;
+  let simulatedPenaltyPaid = 0;
+  let simulatedPrincipalPaid = 0;
 
   if (principalOverride !== '') {
     simulatedPrincipalPaid = parseFloat(principalOverride) || 0;
     simulatedInterestPaid = Math.max(0, numPaid - simulatedPrincipalPaid);
   } else {
     simulatedInterestPaid = Math.min(numPaid, currentInterestDue);
-    simulatedPrincipalPaid = Math.max(0, numPaid - simulatedInterestPaid);
+    const remainingPaidAfterInterest = Math.max(0, numPaid - simulatedInterestPaid);
+    simulatedPenaltyPaid = Math.min(remainingPaidAfterInterest, computedPenaltyAmount);
+    simulatedPrincipalPaid = Math.max(0, remainingPaidAfterInterest - simulatedPenaltyPaid);
   }
 
   const nextSimulatedPrincipal = Math.max(0, Math.round((activePrincipal - simulatedPrincipalPaid) * 100) / 100);
@@ -97,11 +141,30 @@ export default function InstallmentModal({
     setExtensionTenureText(tenureStr);
   };
 
+  // Keep extension extra interest updated if preset is active and principal changes
+  useEffect(() => {
+    if (!extensionPreset) return;
+    let ratePercent = 0;
+    if (extensionPreset === 'same_rate') ratePercent = loan ? parseFloat(loan.interest_rate) || 8 : 8;
+    else if (extensionPreset === 'month') ratePercent = 16;
+    else if (extensionPreset === 'week') ratePercent = 10;
+    else if (extensionPreset === 'days') ratePercent = 8;
+    else if (extensionPreset === 'penalty') ratePercent = 1;
+
+    if (ratePercent > 0) {
+      const extra = Math.round((nextSimulatedPrincipal * (ratePercent / 100)) * 100) / 100;
+      setExtensionExtraInterest(extra);
+    }
+  }, [nextSimulatedPrincipal, extensionPreset, loan]);
+
+  if (!isOpen || !loan) return null;
+
   const handleStartEdit = (inst) => {
     setEditingInstId(inst.id);
     setAmountPaid(inst.amount_paid);
     setPrincipalOverride(inst.principal_paid > 0 ? inst.principal_paid : '');
     setPaymentDate(inst.payment_date || new Date().toISOString().split('T')[0]);
+    setPaymentTime(formatTimeForInput(inst.payment_time));
 
     let pm = inst.payment_mode || 'Gpay';
     let cAmt = '';
@@ -126,6 +189,12 @@ export default function InstallmentModal({
     } else {
       setDiscountValue('');
     }
+    if (inst.penalty_amount && parseFloat(inst.penalty_amount) > 0) {
+      setPenaltyType('rupee');
+      setPenaltyValue(inst.penalty_amount);
+    } else {
+      setPenaltyValue('');
+    }
   };
 
   const handleCancelEdit = () => {
@@ -135,66 +204,85 @@ export default function InstallmentModal({
     setCashAmount('');
     setUpiAmount('');
     setRemark('');
+    setPaymentTime(getCurrentTimeFormatted());
     setProofFile(null);
     setProofPreview('');
     setDiscountType('rupee');
     setDiscountValue('');
+    setPenaltyType('rupee');
+    setPenaltyValue('');
   };
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    if (!amountPaid || parseFloat(amountPaid) <= 0) return;
-
-    const finalDiscount = computedDiscountAmount > 0 ? computedDiscountAmount : 0;
-
-    let finalMode = paymentMode;
-    if (paymentMode === 'Cash + UPI') {
-      const c = parseFloat(cashAmount) || 0;
-      const u = parseFloat(upiAmount) || 0;
-      finalMode = `Cash + UPI (Cash: ₹${c.toLocaleString('en-IN')}, UPI: ₹${u.toLocaleString('en-IN')})`;
+  const handleSubmit = async (e) => {
+    if (e && e.preventDefault) e.preventDefault();
+    
+    if (!amountPaid || parseFloat(amountPaid) <= 0) {
+      alert('Please enter a valid Payment Amount (₹) greater than 0.');
+      return;
     }
 
-    let payload;
-    if (proofFile) {
-      payload = new FormData();
-      payload.append('amount_paid', parseFloat(amountPaid));
-      if (principalOverride !== '') payload.append('principal_paid_override', parseFloat(principalOverride));
-      if (finalDiscount > 0) payload.append('discount_amount', finalDiscount);
-      payload.append('payment_date', paymentDate);
-      payload.append('payment_mode', finalMode);
-      payload.append('remark', remark || `Installment`);
-      if (extensionExtraInterest !== '') payload.append('extension_interest_add', parseFloat(extensionExtraInterest));
-      if (extensionTenureText) payload.append('extension_tenure', extensionTenureText);
-      payload.append('payment_proof', proofFile);
-    } else {
-      payload = {
-        amount_paid: parseFloat(amountPaid),
-        principal_paid_override: principalOverride !== '' ? parseFloat(principalOverride) : null,
-        discount_amount: finalDiscount,
-        payment_date: paymentDate,
-        payment_mode: finalMode,
-        remark: remark || `Installment`,
-        extension_interest_add: extensionExtraInterest !== '' ? parseFloat(extensionExtraInterest) : null,
-        extension_tenure: extensionTenureText || null
-      };
-    }
+    setIsSubmitting(true);
+    try {
+      const finalDiscount = computedDiscountAmount > 0 ? computedDiscountAmount : 0;
+      const finalPenalty = computedPenaltyAmount > 0 ? computedPenaltyAmount : 0;
 
-    if (editingInstId) {
-      onUpdateInstallment(editingInstId, payload);
-    } else {
-      onSubmitInstallment(loan.id, payload);
-    }
+      let finalMode = paymentMode;
+      if (paymentMode === 'Cash + UPI') {
+        const c = parseFloat(cashAmount) || 0;
+        const u = parseFloat(upiAmount) || 0;
+        finalMode = `Cash + UPI (Cash: ₹${c.toLocaleString('en-IN')}, UPI: ₹${u.toLocaleString('en-IN')})`;
+      }
 
-    setEditingInstId(null);
-    setAmountPaid('');
-    setPrincipalOverride('');
-    setCashAmount('');
-    setUpiAmount('');
-    setRemark('');
-    setProofFile(null);
-    setProofPreview('');
-    setDiscountType('rupee');
-    setDiscountValue('');
+      let payload;
+      if (proofFile) {
+        payload = new FormData();
+        payload.append('amount_paid', parseFloat(amountPaid));
+        if (principalOverride !== '') payload.append('principal_paid_override', parseFloat(principalOverride));
+        if (finalDiscount > 0) payload.append('discount_amount', finalDiscount);
+        if (finalPenalty > 0) payload.append('penalty_amount', finalPenalty);
+        payload.append('payment_date', paymentDate);
+        payload.append('payment_time', paymentTime || '');
+        payload.append('payment_mode', finalMode);
+        payload.append('remark', remark || `Installment`);
+        if (extensionExtraInterest !== '') payload.append('extension_interest_add', parseFloat(extensionExtraInterest));
+        if (extensionTenureText) payload.append('extension_tenure', extensionTenureText);
+        payload.append('payment_proof', proofFile);
+      } else {
+        payload = {
+          amount_paid: parseFloat(amountPaid),
+          principal_paid_override: principalOverride !== '' ? parseFloat(principalOverride) : null,
+          discount_amount: finalDiscount,
+          penalty_amount: finalPenalty,
+          payment_date: paymentDate,
+          payment_time: paymentTime || '',
+          payment_mode: finalMode,
+          remark: remark || `Installment`,
+          extension_interest_add: extensionExtraInterest !== '' ? parseFloat(extensionExtraInterest) : null,
+          extension_tenure: extensionTenureText || null
+        };
+      }
+
+      if (editingInstId) {
+        await onUpdateInstallment(editingInstId, payload);
+      } else {
+        await onSubmitInstallment(loan.id, payload);
+      }
+
+      setEditingInstId(null);
+      setAmountPaid('');
+      setPrincipalOverride('');
+      setCashAmount('');
+      setUpiAmount('');
+      setRemark('');
+      setProofFile(null);
+      setProofPreview('');
+      setDiscountType('rupee');
+      setDiscountValue('');
+    } catch (err) {
+      console.error('Submit error:', err);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   // Status toggle handler
@@ -326,7 +414,7 @@ export default function InstallmentModal({
                   }}
                 >
                   <div>
-                    <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>#{inst.installment_no}</span> - {inst.payment_date} ({inst.payment_mode})
+                    <span style={{ fontWeight: 700, color: 'var(--text-primary)' }}>#{inst.installment_no}</span> - {inst.payment_date} {inst.payment_time ? `at ${formatTime12Hour(inst.payment_time)}` : ''} ({inst.payment_mode})
                     {inst.remark && <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginLeft: '0.5rem' }}>[{inst.remark}]</span>}
                   </div>
                   
@@ -372,7 +460,7 @@ export default function InstallmentModal({
         <form onSubmit={handleSubmit}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
             
-            {/* ROW 1: PAYMENT AMOUNT & DISCOUNT FIELD */}
+            {/* ROW 1: PAYMENT AMOUNT & PAYMENT MODE */}
             <div className="form-group">
               <label className="form-label">Payment Amount (₹) *</label>
               <input 
@@ -384,6 +472,91 @@ export default function InstallmentModal({
                 value={amountPaid}
                 onChange={(e) => setAmountPaid(e.target.value)}
               />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Payment Mode</label>
+              <select 
+                className="form-select"
+                value={paymentMode}
+                onChange={(e) => setPaymentMode(e.target.value)}
+              >
+                <option value="Gpay">Gpay / UPI</option>
+                <option value="Cash">Cash</option>
+                <option value="Cash + UPI">Cash + UPI (Split Payment)</option>
+                <option value="PhonePe">PhonePe</option>
+                <option value="Bank Transfer">Bank Transfer</option>
+                <option value="Cheque">Cheque</option>
+              </select>
+            </div>
+
+            {/* ROW 2: PENALTY CHARGED & DISCOUNT GIVEN (SIDE-BY-SIDE) */}
+            <div className="form-group">
+              <label className="form-label" style={{ color: '#ef4444', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                <AlertTriangle size={14} color="#ef4444" />
+                <span>Penalty Charged (Optional)</span>
+              </label>
+              <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                <input 
+                  type="number"
+                  step="any"
+                  min="0"
+                  className="form-input mono"
+                  style={{ flex: 1 }}
+                  placeholder={penaltyType === 'percent' ? "e.g. 5 for 5%" : "e.g. 400 for ₹400"}
+                  value={penaltyValue}
+                  onChange={(e) => setPenaltyValue(e.target.value)}
+                />
+                <div style={{ display: 'flex', background: 'var(--bg-primary)', padding: '2px', borderRadius: '8px', border: '1px solid var(--border-color)', height: '42px', alignItems: 'center' }}>
+                  <button
+                    type="button"
+                    onClick={() => setPenaltyType('rupee')}
+                    title="Penalty in Rupee amount (₹)"
+                    style={{
+                      padding: '0.3rem 0.65rem',
+                      fontSize: '0.8rem',
+                      fontWeight: 800,
+                      borderRadius: '6px',
+                      border: 'none',
+                      cursor: 'pointer',
+                      height: '100%',
+                      background: penaltyType === 'rupee' ? '#ef4444' : 'transparent',
+                      color: penaltyType === 'rupee' ? '#ffffff' : 'var(--text-muted)',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    ₹
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPenaltyType('percent')}
+                    title="Penalty in Percentage (%)"
+                    style={{
+                      padding: '0.3rem 0.65rem',
+                      fontSize: '0.8rem',
+                      fontWeight: 800,
+                      borderRadius: '6px',
+                      border: 'none',
+                      cursor: 'pointer',
+                      height: '100%',
+                      background: penaltyType === 'percent' ? '#ef4444' : 'transparent',
+                      color: penaltyType === 'percent' ? '#ffffff' : 'var(--text-muted)',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    %
+                  </button>
+                </div>
+              </div>
+              {computedPenaltyAmount > 0 ? (
+                <div style={{ fontSize: '0.72rem', color: '#ef4444', fontWeight: 700, marginTop: '0.25rem' }}>
+                  ⚠️ Charging ₹{computedPenaltyAmount.toLocaleString('en-IN')} penalty (Fee only, not principal)
+                </div>
+              ) : (
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+                  Optional penalty fee for late payment
+                </div>
+              )}
             </div>
 
             <div className="form-group">
@@ -402,7 +575,7 @@ export default function InstallmentModal({
                   value={discountValue}
                   onChange={(e) => setDiscountValue(e.target.value)}
                 />
-                <div style={{ display: 'flex', background: 'var(--bg-primary)', padding: '0.125rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)', height: '42px', alignItems: 'center' }}>
+                <div style={{ display: 'flex', background: 'var(--bg-primary)', padding: '2px', borderRadius: '8px', border: '1px solid var(--border-color)', height: '42px', alignItems: 'center' }}>
                   <button
                     type="button"
                     onClick={() => setDiscountType('rupee')}
@@ -411,7 +584,7 @@ export default function InstallmentModal({
                       padding: '0.3rem 0.65rem',
                       fontSize: '0.8rem',
                       fontWeight: 800,
-                      borderRadius: '5px',
+                      borderRadius: '6px',
                       border: 'none',
                       cursor: 'pointer',
                       height: '100%',
@@ -430,7 +603,7 @@ export default function InstallmentModal({
                       padding: '0.3rem 0.65rem',
                       fontSize: '0.8rem',
                       fontWeight: 800,
-                      borderRadius: '5px',
+                      borderRadius: '6px',
                       border: 'none',
                       cursor: 'pointer',
                       height: '100%',
@@ -455,83 +628,30 @@ export default function InstallmentModal({
               )}
             </div>
 
-            {/* ROW 2: PAYMENT MODE & PAYMENT DATE */}
+            {/* ROW 3: PAYMENT DATE + TIME & REMARK / NOTES */}
             <div className="form-group">
-              <label className="form-label">Payment Mode</label>
-              <select 
-                className="form-select"
-                value={paymentMode}
-                onChange={(e) => setPaymentMode(e.target.value)}
-              >
-                <option value="Gpay">Gpay / UPI</option>
-                <option value="Cash">Cash</option>
-                <option value="Cash + UPI">Cash + UPI (Split Payment)</option>
-                <option value="PhonePe">PhonePe</option>
-                <option value="Bank Transfer">Bank Transfer</option>
-                <option value="Cheque">Cheque</option>
-              </select>
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">Payment Date</label>
-              <input 
-                type="date"
-                className="form-input"
-                value={paymentDate}
-                onChange={(e) => setPaymentDate(e.target.value)}
-              />
-            </div>
-
-            {/* CASH + UPI SPLIT BREAKDOWN INPUTS */}
-            {paymentMode === 'Cash + UPI' && (
-              <div className="form-group" style={{ gridColumn: 'span 2', background: 'rgba(99, 102, 241, 0.08)', padding: '0.875rem', borderRadius: 'var(--radius-md)', border: '1px solid rgba(99, 102, 241, 0.3)' }}>
-                <label className="form-label" style={{ color: '#818cf8', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <span>💵 + 📱 Split Installment Breakdown (Cash + UPI)</span>
-                  <span style={{ fontSize: '0.72rem', color: '#10b981' }}>Paid: ₹{(parseFloat(amountPaid) || 0).toLocaleString('en-IN')}</span>
-                </label>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem', marginTop: '0.35rem' }}>
-                  <div>
-                    <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 600 }}>Cash Amount (₹)</label>
-                    <input 
-                      type="number"
-                      step="any"
-                      className="form-input mono"
-                      placeholder="e.g. 1000"
-                      value={cashAmount}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setCashAmount(val);
-                        if (numPaid > 0 && val !== '') {
-                          const remaining = Math.max(0, numPaid - (parseFloat(val) || 0));
-                          setUpiAmount(String(remaining));
-                        }
-                      }}
-                    />
-                  </div>
-                  <div>
-                    <label style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', fontWeight: 600 }}>UPI Amount (₹)</label>
-                    <input 
-                      type="number"
-                      step="any"
-                      className="form-input mono"
-                      placeholder="e.g. 1000"
-                      value={upiAmount}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setUpiAmount(val);
-                        if (numPaid > 0 && val !== '') {
-                          const remaining = Math.max(0, numPaid - (parseFloat(val) || 0));
-                          setCashAmount(String(remaining));
-                        }
-                      }}
-                    />
-                  </div>
-                </div>
+              <label className="form-label">Payment Date & Time</label>
+              <div style={{ display: 'flex', gap: '0.4rem' }}>
+                <input 
+                  type="date"
+                  className="form-input"
+                  style={{ flex: '1.2', minWidth: 0 }}
+                  value={paymentDate}
+                  onChange={(e) => setPaymentDate(e.target.value)}
+                  title="Payment Date"
+                />
+                <input 
+                  type="time"
+                  className="form-input"
+                  style={{ flex: '1', minWidth: 0 }}
+                  value={paymentTime}
+                  onChange={(e) => setPaymentTime(e.target.value)}
+                  title="Payment Time (Editable)"
+                />
               </div>
-            )}
+            </div>
 
-            {/* ROW 3: REMARK / NOTES */}
-            <div className="form-group" style={{ gridColumn: 'span 2' }}>
+            <div className="form-group">
               <label className="form-label">Remark / Notes</label>
               <input 
                 type="text"
@@ -607,6 +727,16 @@ export default function InstallmentModal({
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '0.5rem', marginBottom: '0.875rem' }}>
                   <button 
                     type="button"
+                    onClick={() => applyPreset(loan ? parseFloat(loan.interest_rate) || 8 : 8, `${loan ? loan.interest_tenure : '7days'} (Ext)`, 'same_rate')}
+                    className={`btn ${extensionPreset === 'same_rate' ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ fontSize: '0.72rem', padding: '0.4rem', flexDirection: 'column', gap: '0.1rem' }}
+                  >
+                    <strong>+Ext ({loan ? loan.interest_rate : 8}%)</strong>
+                    <span>Same Rate</span>
+                  </button>
+
+                  <button 
+                    type="button"
                     onClick={() => applyPreset(16, '/Month (Ext)', 'month')}
                     className={`btn ${extensionPreset === 'month' ? 'btn-primary' : 'btn-secondary'}`}
                     style={{ fontSize: '0.72rem', padding: '0.4rem', flexDirection: 'column', gap: '0.1rem' }}
@@ -671,6 +801,12 @@ export default function InstallmentModal({
                   </div>
                 </div>
 
+                {nextSimulatedPrincipal > 0 && parseFloat(extensionExtraInterest || 0) > 0 && (
+                  <div style={{ marginTop: '0.625rem', fontSize: '0.75rem', color: '#a855f7', background: 'rgba(168, 85, 247, 0.1)', padding: '0.55rem 0.75rem', borderRadius: 'var(--radius-sm)', border: '1px solid rgba(168, 85, 247, 0.3)' }}>
+                    💡 <strong>Extension Calculation:</strong> Remaining Principal (₹{nextSimulatedPrincipal.toLocaleString('en-IN')}) + Extension Interest (₹{parseFloat(extensionExtraInterest).toLocaleString('en-IN')}) = <strong>Next Projected Balance Due: ₹{(nextSimulatedPrincipal + parseFloat(extensionExtraInterest)).toLocaleString('en-IN')}</strong>
+                  </div>
+                )}
+
               </div>
             )}
           </div>
@@ -685,9 +821,9 @@ export default function InstallmentModal({
                 Cancel
               </button>
             )}
-            <button type="submit" className="btn btn-success">
+            <button type="submit" disabled={isSubmitting} className="btn btn-success">
               <PlusCircle size={16} />
-              <span>{editingInstId ? 'Save Installment Changes' : 'Record Payment & Submit'}</span>
+              <span>{isSubmitting ? 'Recording...' : (editingInstId ? 'Save Installment Changes' : 'Record Payment & Submit')}</span>
             </button>
           </div>
 

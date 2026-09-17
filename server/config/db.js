@@ -50,10 +50,18 @@ async function initDatabase() {
       await pool.query(`ALTER TABLE loans ADD COLUMN guarantor_name VARCHAR(255) DEFAULT NULL;`);
       await pool.query(`ALTER TABLE loans ADD COLUMN proof_path VARCHAR(500) DEFAULT NULL;`);
       await pool.query(`ALTER TABLE loans ADD COLUMN discount_amount DECIMAL(12,2) DEFAULT 0.00;`);
+      await pool.query(`ALTER TABLE loans ADD COLUMN time_given VARCHAR(20) DEFAULT '';`);
+      await pool.query(`ALTER TABLE loans ADD COLUMN is_flagged TINYINT(1) DEFAULT 0;`);
+      await pool.query(`ALTER TABLE loans ADD COLUMN tag_color VARCHAR(20) DEFAULT NULL;`);
       await pool.query(`ALTER TABLE installments ADD COLUMN principal_paid DECIMAL(12,2) DEFAULT 0.00;`);
       await pool.query(`ALTER TABLE installments ADD COLUMN interest_paid DECIMAL(12,2) DEFAULT 0.00;`);
       await pool.query(`ALTER TABLE installments ADD COLUMN discount_amount DECIMAL(12,2) DEFAULT 0.00;`);
+      await pool.query(`ALTER TABLE installments ADD COLUMN penalty_amount DECIMAL(12,2) DEFAULT 0.00;`);
       await pool.query(`ALTER TABLE installments ADD COLUMN proof_path VARCHAR(500) DEFAULT NULL;`);
+      await pool.query(`ALTER TABLE installments ADD COLUMN payment_time VARCHAR(20) DEFAULT '';`);
+      await pool.query(`ALTER TABLE installments ADD COLUMN is_flagged TINYINT(1) DEFAULT 0;`);
+      await pool.query(`ALTER TABLE installments ADD COLUMN extension_interest DECIMAL(12,2) DEFAULT NULL;`);
+      await pool.query(`ALTER TABLE installments ADD COLUMN extension_tenure VARCHAR(100) DEFAULT NULL;`);
       await pool.query(`CREATE INDEX idx_inst_loan ON installments(loan_id);`);
       await pool.query(`CREATE INDEX idx_col_loan ON collateral_items(loan_id);`);
       await pool.query(`CREATE INDEX idx_doc_loan ON documents(loan_id);`);
@@ -84,11 +92,13 @@ async function initDatabase() {
         interest_tenure TEXT NOT NULL,
         interest_type TEXT DEFAULT 'reducing',
         date_given TEXT NOT NULL,
+        time_given TEXT DEFAULT '',
         return_date TEXT,
         interest_amount REAL DEFAULT 0.00,
         total_amount REAL DEFAULT 0.00,
         balance_due REAL DEFAULT 0.00,
         status TEXT DEFAULT 'active',
+        is_flagged INTEGER DEFAULT 0,
         proof_path TEXT,
         remark TEXT,
         requires_collateral INTEGER DEFAULT 0,
@@ -103,13 +113,19 @@ async function initDatabase() {
         loan_id INTEGER NOT NULL,
         installment_no INTEGER NOT NULL DEFAULT 1,
         payment_date TEXT NOT NULL,
+        payment_time TEXT DEFAULT '',
         amount_paid REAL NOT NULL,
         principal_paid REAL DEFAULT 0.00,
         interest_paid REAL DEFAULT 0.00,
+        discount_amount REAL DEFAULT 0.00,
+        penalty_amount REAL DEFAULT 0.00,
         payment_mode TEXT DEFAULT 'Gpay',
         remaining_balance REAL NOT NULL,
+        is_flagged INTEGER DEFAULT 0,
         proof_path TEXT,
         remark TEXT,
+        extension_interest REAL DEFAULT NULL,
+        extension_tenure TEXT DEFAULT NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (loan_id) REFERENCES loans(id) ON DELETE CASCADE
       );
@@ -122,10 +138,18 @@ async function initDatabase() {
     try { await runSqliteQuery(`ALTER TABLE loans ADD COLUMN guarantor_name TEXT DEFAULT NULL;`); } catch(e){}
     try { await runSqliteQuery(`ALTER TABLE loans ADD COLUMN proof_path TEXT;`); } catch(e){}
     try { await runSqliteQuery(`ALTER TABLE loans ADD COLUMN discount_amount REAL DEFAULT 0.00;`); } catch(e){}
+    try { await runSqliteQuery(`ALTER TABLE loans ADD COLUMN time_given TEXT DEFAULT '';`); } catch(e){}
+    try { await runSqliteQuery(`ALTER TABLE loans ADD COLUMN is_flagged INTEGER DEFAULT 0;`); } catch(e){}
+    try { await runSqliteQuery(`ALTER TABLE loans ADD COLUMN tag_color TEXT DEFAULT NULL;`); } catch(e){}
     try { await runSqliteQuery(`ALTER TABLE installments ADD COLUMN principal_paid REAL DEFAULT 0.00;`); } catch(e){}
     try { await runSqliteQuery(`ALTER TABLE installments ADD COLUMN interest_paid REAL DEFAULT 0.00;`); } catch(e){}
     try { await runSqliteQuery(`ALTER TABLE installments ADD COLUMN discount_amount REAL DEFAULT 0.00;`); } catch(e){}
+    try { await runSqliteQuery(`ALTER TABLE installments ADD COLUMN penalty_amount REAL DEFAULT 0.00;`); } catch(e){}
     try { await runSqliteQuery(`ALTER TABLE installments ADD COLUMN proof_path TEXT;`); } catch(e){}
+    try { await runSqliteQuery(`ALTER TABLE installments ADD COLUMN payment_time TEXT DEFAULT '';`); } catch(e){}
+    try { await runSqliteQuery(`ALTER TABLE installments ADD COLUMN is_flagged INTEGER DEFAULT 0;`); } catch(e){}
+    try { await runSqliteQuery(`ALTER TABLE installments ADD COLUMN extension_interest REAL DEFAULT NULL;`); } catch(e){}
+    try { await runSqliteQuery(`ALTER TABLE installments ADD COLUMN extension_tenure TEXT DEFAULT NULL;`); } catch(e){}
     try { await runSqliteQuery(`CREATE INDEX IF NOT EXISTS idx_inst_loan ON installments(loan_id);`); } catch(e){}
     try { await runSqliteQuery(`CREATE INDEX IF NOT EXISTS idx_col_loan ON collateral_items(loan_id);`); } catch(e){}
     try { await runSqliteQuery(`CREATE INDEX IF NOT EXISTS idx_doc_loan ON documents(loan_id);`); } catch(e){}
@@ -172,7 +196,8 @@ async function initDatabase() {
 
 function runSqliteQuery(sql, params = []) {
   return new Promise((resolve, reject) => {
-    if (sql.trim().toLowerCase().startsWith('select')) {
+    const isReadQuery = /^\s*(select|with|pragma|explain)\b/i.test(sql);
+    if (isReadQuery) {
       sqliteDb.all(sql, params, (err, rows) => {
         if (err) reject(err);
         else resolve([rows]);

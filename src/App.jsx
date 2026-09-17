@@ -24,7 +24,8 @@ import {
   addCollateralItem,
   deleteCollateralItem,
   addDocument,
-  deleteDocument
+  deleteDocument,
+  updateLoanTagColor
 } from './api/client';
 
 export default function App() {
@@ -209,6 +210,15 @@ export default function App() {
     }
   };
 
+  const handleUpdateTagColor = async (loanId, tagColor) => {
+    try {
+      await updateLoanTagColor(loanId, tagColor);
+      await loadData();
+    } catch (err) {
+      alert('Failed to update loan tag color: ' + err.message);
+    }
+  };
+
   return (
     <div className="app-container">
       
@@ -251,6 +261,7 @@ export default function App() {
             setIsAddModalOpen(true);
           }}
           onDeleteLoan={handleDeleteLoan}
+          onUpdateTagColor={handleUpdateTagColor}
         />
       )}
 
@@ -302,6 +313,7 @@ export default function App() {
           setActiveProofLoan(loan);
           setActiveProofIndex(index);
         }}
+        onUpdateTagColor={handleUpdateTagColor}
       />
 
       <PaymentProofGalleryModal 

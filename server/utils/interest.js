@@ -84,16 +84,18 @@ function replayLoanState(loan, installments = []) {
   });
 
   // Calculate cycle 1 initial interest on full principal
-  let cycleInterest = Math.round((origPrincipal * (rate / 100)) * 100) / 100;
-  unpaidInterestAccrued = cycleInterest;
-  totalInterestAccumulated = cycleInterest;
+  let initialInterest = Math.round((origPrincipal * (rate / 100)) * 100) / 100;
+  unpaidInterestAccrued = initialInterest;
+  totalInterestAccumulated = initialInterest;
 
   for (const inst of sortedInsts) {
     const paid = parseFloat(inst.amount_paid) || 0;
     const discount = parseFloat(inst.discount_amount) || 0;
+    const penalty = parseFloat(inst.penalty_amount) || 0;
     totalPaid += paid;
     totalDiscount += discount;
 
+    let penaltyPaid = 0;
     let interestPaid = 0;
     let principalPaid = 0;
 
@@ -112,23 +114,45 @@ function replayLoanState(loan, installments = []) {
       principalPaid = Math.min(currentPrincipal, rawPrincipalPaid);
       interestPaid = Math.max(0, paid - principalPaid);
     } else {
-      interestPaid = Math.min(paid, unpaidInterestAccrued);
-      principalPaid = Math.max(0, paid - interestPaid);
+      penaltyPaid = Math.min(paid, penalty);
+      const remainingPaidAfterPenalty = Math.max(0, paid - penaltyPaid);
+      interestPaid = Math.min(remainingPaidAfterPenalty, unpaidInterestAccrued);
+      principalPaid = Math.max(0, remainingPaidAfterPenalty - interestPaid);
     }
 
     unpaidInterestAccrued = Math.max(0, Math.round((unpaidInterestAccrued - interestPaid) * 100) / 100);
     currentPrincipal = Math.max(0, Math.round((currentPrincipal - principalPaid - discount) * 100) / 100);
+
+    // If previous cycle interest was fully cleared and remaining principal balance exists, accrue next period extension interest
+    if (unpaidInterestAccrued === 0 && currentPrincipal > 0) {
+      const extVal = inst.extension_interest !== undefined && inst.extension_interest !== null && inst.extension_interest !== ''
+        ? parseFloat(inst.extension_interest)
+        : (inst.extension_interest_add !== undefined && inst.extension_interest_add !== null && inst.extension_interest_add !== '' ? parseFloat(inst.extension_interest_add) : null);
+
+      if (extVal !== null && !isNaN(extVal) && extVal > 0) {
+        unpaidInterestAccrued = extVal;
+        totalInterestAccumulated = Math.round((totalInterestAccumulated + extVal) * 100) / 100;
+      } else if (inst.extension_tenure) {
+        // Auto-accrue next cycle interest on active principal balance when tenure extension is recorded
+        const autoCycleExt = Math.round((currentPrincipal * (rate / 100)) * 100) / 100;
+        unpaidInterestAccrued = autoCycleExt;
+        totalInterestAccumulated = Math.round((totalInterestAccumulated + autoCycleExt) * 100) / 100;
+      }
+    }
   }
 
   let totalUnpaidInterest = 0;
   let activeCycleInterest = 0;
 
-  if (unpaidInterestAccrued > 0) {
+  if (currentPrincipal === 0) {
+    totalUnpaidInterest = 0;
+    activeCycleInterest = 0;
+  } else if (unpaidInterestAccrued > 0) {
     totalUnpaidInterest = unpaidInterestAccrued;
     activeCycleInterest = unpaidInterestAccrued;
-  } else if (currentPrincipal > 0) {
-    activeCycleInterest = Math.round((currentPrincipal * (rate / 100)) * 100) / 100;
-    totalUnpaidInterest = activeCycleInterest;
+  } else {
+    totalUnpaidInterest = 0;
+    activeCycleInterest = 0;
   }
 
   const balanceDue = currentPrincipal > 0 
@@ -155,7 +179,7 @@ function replayLoanState(loan, installments = []) {
 
   const displayInterest = (newStatus === 'received' || balanceDue <= 0)
     ? (realizedInterest || initialInterest || activeCycleInterest)
-    : activeCycleInterest;
+    : (activeCycleInterest > 0 ? activeCycleInterest : initialInterest);
 
   return {
     currentPrincipal,

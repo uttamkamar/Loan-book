@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { formatTime12Hour } from '../utils/dateUtils';
 import { 
   X, FileText, Camera, DollarSign, Calendar, ShieldAlert, 
   CheckCircle2, Clock, ChevronDown, ChevronUp, Printer, File, ArrowRight, PlusCircle, FileCheck,
@@ -12,7 +13,9 @@ export default function FullLoanDetailsModal({
   loan, 
   onOpenInstallmentModal, 
   onOpenCollateralModal,
-  onOpenProofModal 
+  onOpenProofModal,
+  onToggleFlag,
+  onUpdateTagColor
 }) {
   const [showInstallmentAccordion, setShowInstallmentAccordion] = useState(true);
 
@@ -33,7 +36,12 @@ export default function FullLoanDetailsModal({
   const totalPaid = installments.reduce((acc, i) => acc + (parseFloat(i.amount_paid) || 0), 0);
 
   const formatCurrency = (val) => {
-    return '₹' + Number(val || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+    const num = Number(val || 0);
+    const hasDecimals = num % 1 !== 0;
+    return '₹' + num.toLocaleString('en-IN', {
+      minimumFractionDigits: hasDecimals ? 2 : 0,
+      maximumFractionDigits: 2
+    });
   };
 
   const handlePrint = () => {
@@ -94,7 +102,7 @@ export default function FullLoanDetailsModal({
               ID #{loan.id}
             </div>
             <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
                 <h2 style={{ fontSize: '1.35rem', fontWeight: 800, color: 'var(--text-primary)' }}>
                   {loan.loan_taker}
                 </h2>
@@ -112,10 +120,59 @@ export default function FullLoanDetailsModal({
                     </span>
                   )
                 )}
+
+                {/* Inline Color Tag Picker (Red, Yellow, Green) placed after badges */}
+                <div style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.35rem',
+                  marginLeft: '0.2rem',
+                  padding: '0.2rem 0.5rem',
+                  borderRadius: '16px',
+                  background: 'var(--bg-primary)',
+                  border: '1px solid var(--border-color)',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
+                }} title="Mark User / Table Row Color">
+                  {[
+                    { color: 'red', hex: '#ef4444', label: 'Red' },
+                    { color: 'yellow', hex: '#eab308', label: 'Yellow' },
+                    { color: 'green', hex: '#22c55e', label: 'Green' }
+                  ].map(dot => {
+                    const isSelected = loan.tag_color === dot.color;
+                    return (
+                      <button
+                        key={dot.color}
+                        type="button"
+                        onClick={() => onUpdateTagColor && onUpdateTagColor(loan.id, isSelected ? null : dot.color)}
+                        title={isSelected ? `Remove ${dot.label} Mark` : `Mark Row as ${dot.label}`}
+                        style={{
+                          width: '16px',
+                          height: '16px',
+                          borderRadius: '50%',
+                          backgroundColor: dot.hex,
+                          border: isSelected ? '2px solid #ffffff' : '1px solid rgba(0,0,0,0.15)',
+                          outline: isSelected ? `2px solid ${dot.hex}` : 'none',
+                          cursor: 'pointer',
+                          boxShadow: isSelected ? `0 0 8px ${dot.hex}` : '0 1px 2px rgba(0,0,0,0.2)',
+                          transform: isSelected ? 'scale(1.15)' : 'scale(1)',
+                          transition: 'all 0.15s ease',
+                          padding: 0,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center'
+                        }}
+                      >
+                        {isSelected && (
+                          <span style={{ color: '#ffffff', fontSize: '9px', fontWeight: 900, lineHeight: 1 }}>✓</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
               <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.25rem', lineHeight: '1.45' }}>
                 <div>
-                  Loan Issued: <strong>{loan.date_given}</strong>
+                  Loan Issued: <strong>{loan.date_given}</strong> {loan.time_given ? <span>at <strong>{formatTime12Hour(loan.time_given)}</strong></span> : ''}
                   {loan.guarantor_name && <> | Guarantor: <strong style={{ color: '#a855f7' }}>{loan.guarantor_name}</strong></>}
                 </div>
                 <div>
@@ -358,8 +415,8 @@ export default function FullLoanDetailsModal({
                         #{inst.installment_no}
                       </span>
                       <div>
-                        <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>
-                          Date: {inst.payment_date} ({inst.payment_mode})
+                        <div style={{ fontWeight: 700, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <span>Date: {inst.payment_date} {inst.payment_time ? `at ${formatTime12Hour(inst.payment_time)}` : ''} ({inst.payment_mode})</span>
                         </div>
                         {inst.remark && <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.1rem' }}>{inst.remark}</div>}
                       </div>
@@ -413,6 +470,11 @@ export default function FullLoanDetailsModal({
                       {parseFloat(inst.discount_amount || 0) > 0 && (
                         <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#a855f7', background: 'rgba(168, 85, 247, 0.15)', padding: '0.2rem 0.5rem', borderRadius: '4px', border: '1px solid rgba(168, 85, 247, 0.3)' }}>
                           🏷️ Discount: {formatCurrency(inst.discount_amount)}
+                        </span>
+                      )}
+                      {parseFloat(inst.penalty_amount || 0) > 0 && (
+                        <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#ef4444', background: 'rgba(239, 68, 68, 0.15)', padding: '0.2rem 0.5rem', borderRadius: '4px', border: '1px solid rgba(239, 68, 68, 0.3)' }}>
+                          ⚠️ Penalty Fee: +{formatCurrency(inst.penalty_amount)}
                         </span>
                       )}
                       <div className="mono" style={{ fontWeight: 800, color: '#10b981', fontSize: '1rem', minWidth: '80px', textAlign: 'right' }}>

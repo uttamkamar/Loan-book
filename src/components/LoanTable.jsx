@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { formatTime12Hour } from '../utils/dateUtils';
 import { 
-  Search, Filter, ShieldAlert, FileText, Camera, PlusCircle, 
-  CheckCircle, Clock, Trash2, Edit3, Eye, EyeOff, FolderOpen, FileCheck,
-  ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight
+  Search, Filter, ShieldAlert, FileText, PlusCircle, 
+  CheckCircle, Clock, Trash2, Edit3, Eye, EyeOff, FolderOpen,
+  ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, MoreVertical
 } from 'lucide-react';
 
 function formatNiceDate(dateStr) {
@@ -39,7 +40,9 @@ export default function LoanTable({
   onOpenFullDetailsModal,
   onOpenProofModal,
   onEditLoan, 
-  onDeleteLoan 
+  onDeleteLoan,
+  onToggleFlag,
+  onUpdateTagColor
 }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -51,6 +54,30 @@ export default function LoanTable({
 
   // Per-row privacy state overrides
   const [toggledRows, setToggledRows] = useState(new Set());
+
+  // Row Actions More Menu State
+  const [openMenuLoanId, setOpenMenuLoanId] = useState(null);
+
+  // Close row actions dropdown on click outside or Escape key press
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (!e.target.closest('.row-actions-container')) {
+        setOpenMenuLoanId(null);
+      }
+    };
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        setOpenMenuLoanId(null);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, []);
 
   const toggleRowPrivacy = (loanId) => {
     setToggledRows(prev => {
@@ -78,7 +105,12 @@ export default function LoanTable({
 
   const formatCurrency = (val, masked) => {
     if (masked) return '₹ •••••';
-    return '₹' + Number(val || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+    const num = Number(val || 0);
+    const hasDecimals = num % 1 !== 0;
+    return '₹' + num.toLocaleString('en-IN', {
+      minimumFractionDigits: hasDecimals ? 2 : 0,
+      maximumFractionDigits: 2
+    });
   };
 
   // Reset pagination to page 1 on search, filter, or pageSize change
@@ -262,7 +294,7 @@ export default function LoanTable({
         <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.825rem' }}>
           <thead>
             <tr style={{ borderBottom: '1px solid var(--border-color)', color: 'var(--text-secondary)' }}>
-              <th style={{ padding: '0.75rem 0.4rem', fontWeight: 700, width: '40px' }}>Privacy</th>
+              <th style={{ padding: '0.75rem 0.4rem', fontWeight: 700, width: '40px', whiteSpace: 'nowrap' }}>Privacy</th>
               <th style={{ padding: '0.75rem 0.4rem', fontWeight: 700, width: '95px', whiteSpace: 'nowrap' }}>Date</th>
               <th style={{ padding: '0.75rem 0.4rem', fontWeight: 700, minWidth: '120px' }}>Loan Taker</th>
               <th style={{ padding: '0.75rem 0.4rem', fontWeight: 700, minWidth: '90px', whiteSpace: 'nowrap' }}>Amount</th>
@@ -270,10 +302,10 @@ export default function LoanTable({
               <th style={{ padding: '0.75rem 0.4rem', fontWeight: 700, minWidth: '85px', whiteSpace: 'nowrap' }}>Return Date</th>
               <th style={{ padding: '0.75rem 0.4rem', fontWeight: 700, minWidth: '95px', whiteSpace: 'nowrap' }}>Interest</th>
               <th style={{ padding: '0.75rem 0.4rem', fontWeight: 700, minWidth: '105px', whiteSpace: 'nowrap' }}>Total / Due</th>
-              <th style={{ padding: '0.75rem 0.4rem', fontWeight: 700, minWidth: '90px', whiteSpace: 'nowrap' }}>Installments</th>
-              <th style={{ padding: '0.75rem 0.4rem', fontWeight: 700, minWidth: '90px' }}>Security & Papers</th>
-              <th style={{ padding: '0.75rem 0.4rem', fontWeight: 700, width: '75px' }}>Status</th>
-              <th style={{ padding: '0.75rem 0.4rem', fontWeight: 700, minWidth: '115px', textAlign: 'right' }}>Actions</th>
+              <th style={{ padding: '0.75rem 0.4rem', fontWeight: 700, minWidth: '95px', whiteSpace: 'nowrap' }}>Installments</th>
+              <th style={{ padding: '0.75rem 0.4rem', fontWeight: 700, minWidth: '140px', whiteSpace: 'nowrap' }}>Security & Papers</th>
+              <th style={{ padding: '0.75rem 0.4rem', fontWeight: 700, minWidth: '75px', whiteSpace: 'nowrap' }}>Status</th>
+              <th style={{ padding: '0.75rem 0.4rem', fontWeight: 700, minWidth: '95px', textAlign: 'right', whiteSpace: 'nowrap' }}>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -293,16 +325,33 @@ export default function LoanTable({
                 const masked = isRowMasked(loan.id);
                 const firstInst = loan.installments && loan.installments.length > 0 ? loan.installments[0] : null;
 
+                const TAG_COLORS = {
+                  red: { bg: 'rgba(239, 68, 68, 0.18)', hoverBg: 'rgba(239, 68, 68, 0.28)', borderLeft: '4px solid #ef4444', dotHex: '#ef4444' },
+                  yellow: { bg: 'rgba(234, 179, 8, 0.18)', hoverBg: 'rgba(234, 179, 8, 0.28)', borderLeft: '4px solid #eab308', dotHex: '#eab308' },
+                  green: { bg: 'rgba(34, 197, 94, 0.18)', hoverBg: 'rgba(34, 197, 94, 0.28)', borderLeft: '4px solid #22c55e', dotHex: '#22c55e' }
+                };
+
+                const tagStyle = loan.tag_color ? TAG_COLORS[loan.tag_color.toLowerCase()] : null;
+                const defaultBg = tagStyle 
+                  ? tagStyle.bg 
+                  : masked 
+                    ? 'rgba(15, 23, 42, 0.2)' 
+                    : isHighValue 
+                      ? 'rgba(168, 85, 247, 0.03)' 
+                      : 'transparent';
+                const hoverBg = tagStyle ? tagStyle.hoverBg : 'var(--bg-card-hover)';
+
                 return (
                   <tr 
                     key={loan.id} 
                     style={{ 
                       borderBottom: '1px solid var(--border-color)',
+                      borderLeft: tagStyle ? tagStyle.borderLeft : '4px solid transparent',
                       transition: 'background 0.2s',
-                      backgroundColor: masked ? 'rgba(15, 23, 42, 0.2)' : isHighValue ? 'rgba(168, 85, 247, 0.03)' : 'transparent'
+                      backgroundColor: defaultBg
                     }}
-                    onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-card-hover)'}
-                    onMouseLeave={(e) => e.currentTarget.style.background = masked ? 'rgba(15, 23, 42, 0.2)' : isHighValue ? 'rgba(168, 85, 247, 0.03)' : 'transparent'}
+                    onMouseEnter={(e) => e.currentTarget.style.background = hoverBg}
+                    onMouseLeave={(e) => e.currentTarget.style.background = defaultBg}
                   >
                     
                     {/* Individual Row Privacy Eye Toggle */}
@@ -317,14 +366,35 @@ export default function LoanTable({
                       </button>
                     </td>
 
-                    {/* Formatted Nice Date (e.g. 30th Jul 2026) */}
+                    {/* Formatted Nice Date & Time */}
                     <td style={{ padding: '0.75rem 0.4rem', whiteSpace: 'nowrap', color: 'var(--text-secondary)', fontSize: '0.78rem' }}>
-                      {formatNiceDate(loan.date_given)}
+                      <div>{formatNiceDate(loan.date_given)}</div>
+                      {loan.time_given && (
+                        <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '0.2rem', marginTop: '0.1rem' }}>
+                          <Clock size={11} color="#818cf8" />
+                          <span>{formatTime12Hour(loan.time_given)}</span>
+                        </div>
+                      )}
                     </td>
 
-                    {/* Loan Taker (Name Masked Compactly as B** D**) */}
+                    {/* Loan Taker */}
                     <td style={{ padding: '0.75rem 0.4rem', fontWeight: 700, color: 'var(--text-primary)' }}>
-                      <div>{masked ? maskName(loan.loan_taker) : loan.loan_taker}</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                        {tagStyle && (
+                          <span 
+                            title={`Marked with ${loan.tag_color} tag`}
+                            style={{
+                              width: '10px',
+                              height: '10px',
+                              borderRadius: '50%',
+                              backgroundColor: tagStyle.dotHex,
+                              boxShadow: `0 0 6px ${tagStyle.dotHex}`,
+                              flexShrink: 0
+                            }}
+                          />
+                        )}
+                        <span>{masked ? maskName(loan.loan_taker) : loan.loan_taker}</span>
+                      </div>
                       <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', fontWeight: 400 }}>
                         Mode: <span style={{ color: 'var(--text-secondary)' }}>{loan.payment_mode || 'Gpay'}</span>
                         {loan.guarantor_name && (
@@ -496,11 +566,11 @@ export default function LoanTable({
                       </span>
                     </td>
 
-                    {/* Row Actions (Disabled when privacy is active for this row) */}
+                    {/* Row Actions */}
                     <td style={{ padding: '0.75rem 0.4rem', textAlign: 'right' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.3rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '0.35rem' }}>
                         
-                        {/* Compact Master View File Icon Button */}
+                        {/* 1. Compact View File Icon Button */}
                         <button 
                           onClick={() => {
                             if (masked) return;
@@ -517,62 +587,87 @@ export default function LoanTable({
                             cursor: masked ? 'not-allowed' : 'pointer',
                             filter: masked ? 'grayscale(1)' : 'none'
                           }}
-                          title={masked ? "Privacy Active: Unmask borrower eye toggle to open File" : "Click to view all payment proof images & loan files"}
+                          title={masked ? "Privacy Active: Unmask borrower eye toggle to view loan details" : "View loan details"}
+                          aria-label={masked ? "Privacy Active: Unmask borrower eye toggle to view loan details" : "View loan details"}
                         >
                           <FolderOpen size={14} />
                         </button>
 
-                        {/* Record Installment (Pay Button) */}
-                        {loan.status !== 'received' && (
+                        {/* 2. Record Payment (Pay Button - Primary Green Action) */}
+                        <button 
+                          onClick={() => {
+                            if (masked) return;
+                            onOpenInstallmentModal(loan);
+                          }}
+                          disabled={masked}
+                          className="btn btn-success"
+                          style={{
+                            padding: '0.3rem 0.55rem',
+                            fontSize: '0.72rem',
+                            opacity: masked ? 0.35 : 1,
+                            cursor: masked ? 'not-allowed' : 'pointer',
+                            filter: masked ? 'grayscale(1)' : 'none'
+                          }}
+                          title={masked ? "Privacy Active: Unmask borrower eye toggle to record payment" : "Record Payment Installment"}
+                          aria-label={masked ? "Privacy Active: Unmask borrower eye toggle to record payment" : "Record Payment Installment"}
+                        >
+                          <PlusCircle size={13} />
+                          <span>{loan.status === 'received' ? 'Payment' : 'Pay'}</span>
+                        </button>
+
+                        {/* 3. Three-Dot More Button & Dropdown Menu */}
+                        <div className="row-actions-container">
                           <button 
-                            onClick={() => !masked && onOpenInstallmentModal(loan)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (masked) return;
+                              setOpenMenuLoanId(openMenuLoanId === loan.id ? null : loan.id);
+                            }}
                             disabled={masked}
-                            className="btn btn-success"
+                            className="btn btn-secondary"
                             style={{
-                              padding: '0.3rem 0.55rem',
-                              fontSize: '0.72rem',
+                              padding: '0.3rem 0.45rem',
                               opacity: masked ? 0.35 : 1,
                               cursor: masked ? 'not-allowed' : 'pointer',
                               filter: masked ? 'grayscale(1)' : 'none'
                             }}
-                            title={masked ? "Privacy Active: Unmask borrower eye toggle to record payment" : "Record Payment Installment"}
+                            title={masked ? "Privacy Active: Unmask borrower eye toggle for more actions" : "More actions"}
+                            aria-label={masked ? "Privacy Active: Unmask borrower eye toggle for more actions" : "More actions"}
+                            aria-expanded={!masked && openMenuLoanId === loan.id}
                           >
-                            <PlusCircle size={13} />
-                            <span>Pay</span>
+                            <MoreVertical size={14} />
                           </button>
-                        )}
 
-                        {/* Edit Loan Button */}
-                        <button 
-                          onClick={() => !masked && onEditLoan(loan)}
-                          disabled={masked}
-                          className="btn btn-secondary"
-                          style={{
-                            padding: '0.3rem 0.45rem',
-                            opacity: masked ? 0.35 : 1,
-                            cursor: masked ? 'not-allowed' : 'pointer',
-                            filter: masked ? 'grayscale(1)' : 'none'
-                          }}
-                          title={masked ? "Privacy Active: Unmask borrower eye toggle to edit loan details" : "Edit Loan Details"}
-                        >
-                          <Edit3 size={13} />
-                        </button>
+                          {!masked && openMenuLoanId === loan.id && (
+                            <div className="row-actions-dropdown">
+                              <button
+                                className="row-actions-dropdown-item"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setOpenMenuLoanId(null);
+                                  onEditLoan(loan);
+                                }}
+                                title="Edit loan details"
+                              >
+                                <Edit3 size={14} />
+                                <span>Edit Loan</span>
+                              </button>
 
-                        {/* Delete Loan Button */}
-                        <button 
-                          onClick={() => !masked && onDeleteLoan(loan.id)}
-                          disabled={masked}
-                          className="btn btn-danger"
-                          style={{
-                            padding: '0.3rem 0.45rem',
-                            opacity: masked ? 0.35 : 1,
-                            cursor: masked ? 'not-allowed' : 'pointer',
-                            filter: masked ? 'grayscale(1)' : 'none'
-                          }}
-                          title={masked ? "Privacy Active: Unmask borrower eye toggle to delete entry" : "Delete Entry"}
-                        >
-                          <Trash2 size={13} />
-                        </button>
+                              <button
+                                className="row-actions-dropdown-item danger"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setOpenMenuLoanId(null);
+                                  onDeleteLoan(loan.id);
+                                }}
+                                title="Delete loan entry"
+                              >
+                                <Trash2 size={14} />
+                                <span>Delete Loan</span>
+                              </button>
+                            </div>
+                          )}
+                        </div>
 
                       </div>
                     </td>

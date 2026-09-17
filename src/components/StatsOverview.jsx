@@ -6,20 +6,80 @@ function calculateEarnedInterest(loan) {
   if (!loan) return 0;
   const principal = parseFloat(loan.loan_amount) || 0;
   const installments = loan.installments || [];
+  const rate = parseFloat(loan.interest_rate) || 0;
 
+  // 1. Fully Completed / Settled Loans (Option A: Earned Interest = Total Paid - Net Principal)
+  if (loan.status === 'received') {
+    const totalPaid = installments.length > 0
+      ? installments.reduce((acc, i) => acc + (parseFloat(i.amount_paid) || 0), 0)
+      : Math.max(0, (parseFloat(loan.total_amount) || (principal + (parseFloat(loan.interest_amount) || 0))) - (parseFloat(loan.discount_amount) || 0));
+    
+    const totalDiscount = (installments || []).reduce((acc, i) => acc + (parseFloat(i.discount_amount) || 0), 0) + (parseFloat(loan.discount_amount) || 0);
+    const effectivePrincipal = Math.max(0, principal - totalDiscount);
+    
+    return Math.max(0, Math.round((totalPaid - effectivePrincipal) * 100) / 100);
+  }
+
+  // 2. Active / Partial Loans with Installment Payments (Extract Interest Paid, ignoring principal returns)
   if (installments.length > 0) {
-    const totalPaid = installments.reduce((acc, i) => acc + (parseFloat(i.amount_paid) || 0), 0);
-    if (loan.status === 'received' || totalPaid >= principal) {
-      return Math.max(0, totalPaid - principal);
+    if (loan.interest_type === 'flat') {
+      const totalPaid = installments.reduce((acc, i) => acc + (parseFloat(i.amount_paid) || 0), 0);
+      const fixedInterest = Math.round((principal * (rate / 100)) * 100) / 100;
+      return Math.min(totalPaid, fixedInterest);
     }
-    const rate = parseFloat(loan.interest_rate) || 0;
-    const initialInterest = Math.round((principal * (rate / 100)) * 100) / 100;
-    return Math.min(totalPaid, initialInterest);
-  } else if (loan.status === 'received') {
-    const origTot = parseFloat(loan.total_amount) || (principal + (parseFloat(loan.interest_amount) || 0));
-    const disc = parseFloat(loan.discount_amount) || 0;
-    const totalPaid = Math.max(0, origTot - disc);
-    return Math.max(0, totalPaid - principal);
+
+    let currentPrincipal = principal;
+    let initialInterest = Math.round((principal * (rate / 100)) * 100) / 100;
+    let unpaidInterestAccrued = initialInterest;
+    let earnedInterest = 0;
+
+    const sortedInsts = [...installments].sort((a, b) => {
+      const dateA = new Date(a.payment_date || a.created_at || 0).getTime();
+      const dateB = new Date(b.payment_date || b.created_at || 0).getTime();
+      if (dateA !== dateB) return dateA - dateB;
+      return (a.installment_no || 0) - (b.installment_no || 0);
+    });
+
+    for (const inst of sortedInsts) {
+      const paid = parseFloat(inst.amount_paid) || 0;
+      const discount = parseFloat(inst.discount_amount) || 0;
+      
+      const rawPrincipalPaid = inst.principal_paid !== undefined && inst.principal_paid !== null && inst.principal_paid !== ''
+        ? parseFloat(inst.principal_paid)
+        : null;
+
+      let interestPaid = 0;
+      let principalPaid = 0;
+
+      const isExplicitOverride = Boolean(inst.is_override) || (
+        rawPrincipalPaid !== null && 
+        rawPrincipalPaid > 0 && 
+        (rawPrincipalPaid !== paid || unpaidInterestAccrued === 0)
+      );
+
+      if (isExplicitOverride) {
+        principalPaid = Math.min(currentPrincipal, rawPrincipalPaid);
+        interestPaid = Math.max(0, paid - principalPaid);
+      } else {
+        interestPaid = Math.min(paid, unpaidInterestAccrued);
+        principalPaid = Math.max(0, paid - interestPaid);
+      }
+
+      earnedInterest += interestPaid;
+      unpaidInterestAccrued = Math.max(0, Math.round((unpaidInterestAccrued - interestPaid) * 100) / 100);
+      currentPrincipal = Math.max(0, Math.round((currentPrincipal - principalPaid - discount) * 100) / 100);
+
+      if (unpaidInterestAccrued === 0 && currentPrincipal > 0) {
+        const extVal = inst.extension_interest !== undefined && inst.extension_interest !== null && inst.extension_interest !== ''
+          ? parseFloat(inst.extension_interest)
+          : null;
+        if (extVal !== null && !isNaN(extVal) && extVal > 0) {
+          unpaidInterestAccrued = extVal;
+        }
+      }
+    }
+
+    return Math.round(earnedInterest * 100) / 100;
   }
 
   return 0;
@@ -36,6 +96,7 @@ export default function StatsOverview({ loans = [], isGlobalPrivacyOn = false })
   const totalPendingInterest = pendingLoans.reduce((acc, l) => acc + (parseFloat(l.interest_amount) || 0), 0);
 
   const totalBalanceDue = loans.reduce((acc, l) => acc + (parseFloat(l.balance_due) || 0), 0);
+  const totalActivePrincipal = pendingLoans.reduce((acc, l) => acc + (parseFloat(l.current_principal !== undefined && l.current_principal !== null ? l.current_principal : l.loan_amount) || 0), 0);
   
   const activeCount = pendingLoans.length;
   const receivedCount = loans.filter(l => l.status === 'received').length;
@@ -44,7 +105,12 @@ export default function StatsOverview({ loans = [], isGlobalPrivacyOn = false })
 
   const formatCurrency = (val) => {
     if (isGlobalPrivacyOn) return '₹ •••••';
-    return '₹' + Number(val || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+    const num = Number(val || 0);
+    const hasDecimals = num % 1 !== 0;
+    return '₹' + num.toLocaleString('en-IN', {
+      minimumFractionDigits: hasDecimals ? 2 : 0,
+      maximumFractionDigits: 2
+    });
   };
 
   return (
@@ -83,7 +149,7 @@ export default function StatsOverview({ loans = [], isGlobalPrivacyOn = false })
           {formatCurrency(totalReceivedInterest)}
         </div>
         <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
-          Realized profit from completed loans ({receivedCount})
+          Realized profit from settlements & installments
         </div>
       </div>
 
@@ -99,7 +165,7 @@ export default function StatsOverview({ loans = [], isGlobalPrivacyOn = false })
           {formatCurrency(totalBalanceDue)}
         </div>
         <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
-          {activeCount} active / partial loans
+          {activeCount} active / partial (Prin: {formatCurrency(totalActivePrincipal)})
         </div>
       </div>
 

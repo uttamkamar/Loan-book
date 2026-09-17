@@ -49,6 +49,15 @@ export async function updateLoan(id, data) {
   return await parseResponse(res, 'Failed to update loan');
 }
 
+export async function updateLoanTagColor(id, tagColor) {
+  const res = await fetch(`${API_BASE}/loans/${id}/tag-color`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tag_color: tagColor })
+  });
+  return await parseResponse(res, 'Failed to update loan color');
+}
+
 export async function deleteLoan(id) {
   const res = await fetch(`${API_BASE}/loans/${id}`, {
     method: 'DELETE'

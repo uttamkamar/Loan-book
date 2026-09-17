@@ -8,6 +8,7 @@ const { initDatabase, query, getDbType } = require('./config/db');
 const upload = require('./middleware/upload');
 const { calculateLoanTotals, replayLoanState } = require('./utils/interest');
 const { parseExcelLoans, generateLoansExcel } = require('./utils/excel');
+const { seedData } = require('./seed');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -54,8 +55,22 @@ async function cleanOrphanedRecords() {
     await query(`DELETE FROM collateral_items WHERE loan_id NOT IN (SELECT id FROM loans)`);
     await query(`DELETE FROM documents WHERE loan_id NOT IN (SELECT id FROM loans)`);
 
-    // Normalize all existing loan ledger records (clear un-overridden legacy principal_paid values equal to amount_paid)
+    // Normalize legacy principal_paid values equal to amount_paid
     await query(`UPDATE installments SET principal_paid = NULL WHERE principal_paid = amount_paid`);
+
+    // Fix extension_interest on Installment 1 for Loan 38 (Rekha Boudi ₹12,000 8% 7-day loan)
+    await query(`
+      UPDATE installments 
+      SET extension_interest = 960, extension_tenure = '7days'
+      WHERE id = 37 AND loan_id = 38 AND (extension_interest IS NULL OR extension_interest = 480)
+    `);
+
+    // Fix penalty_amount on Installment 1 (id 44) for Loan 23 (Rinku ₹15,000 14%/mo loan)
+    await query(`
+      UPDATE installments 
+      SET penalty_amount = 150 
+      WHERE id = 44 AND loan_id = 23 AND (penalty_amount IS NULL OR penalty_amount = 0)
+    `);
 
     const [allLoans] = await query(`SELECT * FROM loans`);
     for (let loan of (allLoans || [])) {
@@ -68,140 +83,30 @@ async function cleanOrphanedRecords() {
       `, [state.interestAmount, state.totalAmount, state.balanceDue, state.currentPrincipal, state.status, loan.id]);
     }
   } catch (e) {
-    console.error('Clean error:', e);
+    console.error('Clean error:', sanitizeError(e));
   }
 }
 
-async function seedInitialData() {
-  const [existing] = await query(`SELECT COUNT(*) as count FROM loans`);
-  const count = existing[0]?.count || existing[0]?.['COUNT(*)'] || 0;
+// EXPLICIT DEMO/SAMPLE DATA SEEDING API ENDPOINT (Requires explicit call; refuses to run if database contains data unless force: true)
+app.post('/api/admin/seed', async (req, res) => {
+  try {
+    const { force = false } = req.body || {};
+    const [existing] = await query(`SELECT COUNT(*) as count FROM loans`);
+    const count = existing[0]?.count || existing[0]?.['COUNT(*)'] || 0;
 
-  if (count === 0) {
-    console.log('Seeding initial sample loan data from Excel ledger...');
-    const sampleLoans = [
-      {
-        loan_taker: 'Bubai Da Wife',
-        loan_amount: 6000,
-        payment_mode: 'Gpay',
-        interest_rate: 10,
-        interest_tenure: '/week',
-        date_given: '2026-07-30',
-        return_date: '3-7 Aug 2026',
-        interest_amount: 600,
-        total_amount: 6600,
-        balance_due: 0,
-        status: 'received',
-        remark: 'Completed loan',
-        requires_collateral: 0
-      },
-      {
-        loan_taker: 'Bubai Da Wife',
-        loan_amount: 10000,
-        payment_mode: 'Gpay',
-        interest_rate: 16,
-        interest_tenure: '/Month',
-        date_given: '2026-07-30',
-        return_date: '31-Aug 2026',
-        interest_amount: 1600,
-        total_amount: 11600,
-        balance_due: 9600,
-        status: 'active',
-        remark: '2000/- paid on 8.8.26',
-        requires_collateral: 0
-      },
-      {
-        loan_taker: 'Bubai Da Wife',
-        loan_amount: 16000,
-        payment_mode: 'Gpay',
-        interest_rate: 8.80,
-        interest_tenure: 'for 3days',
-        date_given: '2026-08-04',
-        return_date: '7th Aug 2026',
-        interest_amount: 1408,
-        total_amount: 17408,
-        balance_due: 0,
-        status: 'received',
-        remark: 'If return date exid then take 10% interest',
-        requires_collateral: 0
-      },
-      {
-        loan_taker: 'Bubai Da Wife',
-        loan_amount: 5000,
-        payment_mode: 'Gpay',
-        interest_rate: 8,
-        interest_tenure: 'For 1 day',
-        date_given: '2026-08-06',
-        return_date: '8th Aug 2026',
-        interest_amount: 400,
-        total_amount: 5400,
-        balance_due: 0,
-        status: 'received',
-        remark: 'Returned on time',
-        requires_collateral: 0
-      },
-      {
-        loan_taker: 'Bubai Da Wife',
-        loan_amount: 4000,
-        payment_mode: 'Gpay',
-        interest_rate: 8,
-        interest_tenure: 'for 12 hours',
-        date_given: '2026-08-07',
-        return_date: '7th Aug 2026',
-        interest_amount: 320,
-        total_amount: 4320,
-        balance_due: 0,
-        status: 'received',
-        remark: 'Quick short loan',
-        requires_collateral: 0
-      },
-      {
-        loan_taker: 'Vikram Singh',
-        loan_amount: 45000,
-        payment_mode: 'Bank Transfer',
-        interest_rate: 5,
-        interest_tenure: '/Month',
-        date_given: '2026-08-08',
-        return_date: '08-Sep-2026',
-        interest_amount: 2250,
-        total_amount: 47250,
-        balance_due: 47250,
-        status: 'active',
-        remark: 'High value loan with security gold jewelry pledged',
-        requires_collateral: 1
-      }
-    ];
-
-    for (let loan of sampleLoans) {
-      const [res] = await query(`
-        INSERT INTO loans (loan_taker, loan_amount, payment_mode, interest_rate, interest_tenure, date_given, return_date, interest_amount, total_amount, balance_due, status, remark, requires_collateral)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `, [
-        loan.loan_taker, loan.loan_amount, loan.payment_mode, loan.interest_rate,
-        loan.interest_tenure, loan.date_given, loan.return_date, loan.interest_amount,
-        loan.total_amount, loan.balance_due, loan.status, loan.remark, loan.requires_collateral
-      ]);
-
-      const loanId = res.insertId;
-
-      // Seed installment for Bubai Da Wife 10000 loan
-      if (loan.loan_amount === 10000) {
-        await query(`
-          INSERT INTO installments (loan_id, installment_no, payment_date, amount_paid, payment_mode, remaining_balance, remark)
-          VALUES (?, 1, '2026-08-08', 2000, 'Gpay', 9600, 'First installment paid')
-        `, [loanId]);
-      }
-
-      // Seed collateral item for >30k loan
-      if (loan.loan_amount === 45000) {
-        await query(`
-          INSERT INTO collateral_items (loan_id, item_name, description, estimated_value, status, notes)
-          VALUES (?, 'Gold Necklace & Ring (22K, 25g)', 'Handed over by borrower as security collateral under >30k rule. Valued at ~75,000 INR.', 75000, 'pledged', 'Stored safely in locker #4')
-        `, [loanId]);
-      }
+    if (count > 0 && !force) {
+      return res.status(400).json({
+        error: `Seeding refused: Database already contains ${count} loan record(s). Run with force: true to seed sample data alongside existing records.`
+      });
     }
-    console.log('Sample data successfully seeded!');
+
+    const insertedCount = await seedData({ force });
+    await cleanOrphanedRecords();
+    res.json({ message: `Explicitly seeded ${insertedCount} demo/sample loan records!`, count: insertedCount });
+  } catch (err) {
+    res.status(500).json({ error: sanitizeError(err) });
   }
-}
+});
 
 // ----------------------------------------------------
 // API ROUTES
@@ -316,8 +221,10 @@ app.post('/api/loans', handleUploadOrJson, async (req, res) => {
       interest_tenure,
       interest_type,
       date_given,
+      time_given,
       return_date,
       remark,
+      is_flagged,
       collateral_item_name,
       collateral_description,
       collateral_estimated_value
@@ -326,6 +233,7 @@ app.post('/api/loans', handleUploadOrJson, async (req, res) => {
     const amount = parseFloat(loan_amount) || 0;
     const rate = parseFloat(interest_rate) || 0;
     const type = interest_type || 'reducing';
+    const isFlagged = is_flagged === true || is_flagged === 1 || is_flagged === '1' ? 1 : 0;
     const requiresCollateral = body.requires_collateral !== undefined 
       ? (parseInt(body.requires_collateral, 10) || body.requires_collateral === '1' || body.requires_collateral === true ? 1 : 0) 
       : (amount >= 30000 ? 1 : 0);
@@ -333,12 +241,12 @@ app.post('/api/loans', handleUploadOrJson, async (req, res) => {
     const { interestAmount, totalAmount, balanceDue } = calculateLoanTotals(amount, rate, interest_tenure, type, amount);
 
     const [result] = await query(`
-      INSERT INTO loans (loan_taker, guarantor_name, loan_amount, current_principal, payment_mode, interest_rate, interest_tenure, interest_type, date_given, return_date, interest_amount, total_amount, balance_due, status, remark, requires_collateral)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+      INSERT INTO loans (loan_taker, guarantor_name, loan_amount, current_principal, payment_mode, interest_rate, interest_tenure, interest_type, date_given, time_given, return_date, interest_amount, total_amount, balance_due, status, is_flagged, remark, requires_collateral)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
     `, [
       loan_taker || 'Unknown Borrower', guarantor_name || null, amount, amount, payment_mode || 'Gpay', rate,
-      interest_tenure || '/Month', type, date_given || new Date().toISOString().split('T')[0],
-      return_date || '', interestAmount, totalAmount, balanceDue, remark || '', requiresCollateral
+      interest_tenure || '/Month', type, date_given || new Date().toISOString().split('T')[0], time_given || '',
+      return_date || '', interestAmount, totalAmount, balanceDue, isFlagged, remark || '', requiresCollateral
     ]);
 
     const loanId = result.insertId;
@@ -410,7 +318,7 @@ app.post('/api/loans/:id/installments', handleUploadOrJson, async (req, res) => 
   try {
     const loanId = req.params.id;
     const body = req.body || {};
-    const { amount_paid, principal_paid_override, discount_amount, payment_date, payment_mode, remark, extension_interest_add, extension_tenure } = body;
+    const { amount_paid, principal_paid_override, discount_amount, penalty_amount, payment_date, payment_time, payment_mode, remark, is_flagged, extension_interest_add, extension_tenure } = body;
 
     const [loans] = await query(`SELECT * FROM loans WHERE id = ?`, [loanId]);
     if (!loans || !loans.length) return res.status(404).json({ error: 'Loan not found' });
@@ -421,9 +329,16 @@ app.post('/api/loans/:id/installments', handleUploadOrJson, async (req, res) => 
     const installmentNo = (existingInsts.length || 0) + 1;
     const paidAmount = parseFloat(amount_paid) || 0;
     const discountVal = parseFloat(discount_amount) || 0;
+    const penaltyVal = parseFloat(penalty_amount) || 0;
+    const isFlagged = is_flagged === true || is_flagged === 1 || is_flagged === '1' ? 1 : 0;
     const principalPaid = principal_paid_override !== undefined && principal_paid_override !== null && principal_paid_override !== '' 
       ? parseFloat(principal_paid_override) 
       : null;
+
+    const extInterestVal = extension_interest_add && parseFloat(extension_interest_add) > 0 
+      ? parseFloat(extension_interest_add) 
+      : null;
+    const extTenureVal = extension_tenure || null;
 
     // Check if payment proof image file was uploaded
     const allFiles = req.files || [];
@@ -432,36 +347,35 @@ app.post('/api/loans/:id/installments', handleUploadOrJson, async (req, res) => 
 
     // Record Installment Entry
     await query(`
-      INSERT INTO installments (loan_id, installment_no, payment_date, amount_paid, principal_paid, interest_paid, discount_amount, payment_mode, remaining_balance, proof_path, remark)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO installments (loan_id, installment_no, payment_date, payment_time, amount_paid, principal_paid, interest_paid, discount_amount, penalty_amount, payment_mode, remaining_balance, is_flagged, proof_path, remark, extension_interest, extension_tenure)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `, [
       loanId, 
       installmentNo, 
       payment_date || new Date().toISOString().split('T')[0], 
+      payment_time || '',
       paidAmount,
       principalPaid,
-      Math.max(0, paidAmount - principalPaid),
+      Math.max(0, paidAmount - (principalPaid || 0)),
       discountVal,
+      penaltyVal,
       payment_mode || 'Gpay', 
       0, 
+      isFlagged,
       proofPath,
-      remark || `Installment #${installmentNo}`
+      remark || `Installment #${installmentNo}`,
+      extInterestVal,
+      extTenureVal
     ]);
 
-    // Handle Extension Interest Addition if borrower requests more time
-    if (extension_interest_add && parseFloat(extension_interest_add) > 0) {
-      const extraInterest = parseFloat(extension_interest_add);
-      const updatedInterestTotal = Math.round(((parseFloat(loan.interest_amount) || 0) + extraInterest) * 100) / 100;
-      const updatedTenure = extension_tenure || loan.interest_tenure;
+    // If marked as late payment (red flag), also update loan's flag status to 1
+    if (isFlagged === 1) {
+      await query(`UPDATE loans SET is_flagged = 1 WHERE id = ?`, [loanId]);
+    }
 
-      await query(`
-        UPDATE loans
-        SET interest_amount = ?, interest_tenure = ?
-        WHERE id = ?
-      `, [updatedInterestTotal, updatedTenure, loanId]);
-
-      loan.interest_amount = updatedInterestTotal;
-      loan.interest_tenure = updatedTenure;
+    if (extTenureVal) {
+      await query(`UPDATE loans SET interest_tenure = ? WHERE id = ?`, [extTenureVal, loanId]);
+      loan.interest_tenure = extTenureVal;
     }
 
     // Replay state across all installments
@@ -490,7 +404,7 @@ app.put('/api/installments/:id', handleUploadOrJson, async (req, res) => {
   try {
     const instId = req.params.id;
     const body = req.body || {};
-    const { amount_paid, principal_paid_override, discount_amount, payment_date, payment_mode, remark } = body;
+    const { amount_paid, principal_paid_override, discount_amount, penalty_amount, payment_date, payment_time, payment_mode, is_flagged, remark, extension_interest_add, extension_tenure } = body;
 
     const [insts] = await query(`SELECT * FROM installments WHERE id = ?`, [instId]);
     if (!insts || !insts.length) {
@@ -514,22 +428,44 @@ app.put('/api/installments/:id', handleUploadOrJson, async (req, res) => {
     const allFiles = req.files || [];
     const proofFile = allFiles.find(f => f.fieldname === 'payment_proof' || f.fieldname === 'proof_file' || f.fieldname === 'proof') || (req.file && (req.file.fieldname === 'payment_proof' || req.file.fieldname === 'proof_file' || req.file.fieldname === 'proof') ? req.file : null);
     const updatedProofPath = proofFile ? '/uploads/documents/' + proofFile.filename : currentInst.proof_path;
+    const isFlaggedVal = is_flagged !== undefined && is_flagged !== null 
+      ? (is_flagged === true || is_flagged === 1 || is_flagged === '1' ? 1 : 0)
+      : (currentInst.is_flagged || 0);
+
+    const extInterestVal = extension_interest_add !== undefined && extension_interest_add !== null && extension_interest_add !== ''
+      ? parseFloat(extension_interest_add)
+      : currentInst.extension_interest;
+    const extTenureVal = extension_tenure !== undefined ? extension_tenure : currentInst.extension_tenure;
 
     // Update Installment Entry
     await query(`
       UPDATE installments
-      SET amount_paid = ?, principal_paid = ?, discount_amount = ?, payment_date = ?, payment_mode = ?, proof_path = ?, remark = ?
+      SET amount_paid = ?, principal_paid = ?, discount_amount = ?, penalty_amount = ?, payment_date = ?, payment_time = ?, payment_mode = ?, is_flagged = ?, proof_path = ?, remark = ?, extension_interest = ?, extension_tenure = ?
       WHERE id = ?
     `, [
       parseFloat(amount_paid) || currentInst.amount_paid,
       principal_paid_override !== undefined && principal_paid_override !== null && principal_paid_override !== '' ? parseFloat(principal_paid_override) : null,
       discount_amount !== undefined && discount_amount !== null && discount_amount !== '' ? parseFloat(discount_amount) : (currentInst.discount_amount || 0),
+      penalty_amount !== undefined && penalty_amount !== null && penalty_amount !== '' ? parseFloat(penalty_amount) : (currentInst.penalty_amount || 0),
       payment_date || currentInst.payment_date,
+      payment_time !== undefined ? payment_time : currentInst.payment_time,
       payment_mode || currentInst.payment_mode,
+      isFlaggedVal,
       updatedProofPath,
       remark !== undefined ? remark : currentInst.remark,
+      extInterestVal,
+      extTenureVal,
       instId
     ]);
+
+    if (isFlaggedVal === 1) {
+      await query(`UPDATE loans SET is_flagged = 1 WHERE id = ?`, [loanId]);
+    }
+
+    if (extTenureVal) {
+      await query(`UPDATE loans SET interest_tenure = ? WHERE id = ?`, [extTenureVal, loanId]);
+      loan.interest_tenure = extTenureVal;
+    }
 
     const [allInsts] = await query(`SELECT * FROM installments WHERE loan_id = ? ORDER BY installment_no ASC`, [loanId]);
 
@@ -766,6 +702,43 @@ app.delete('/api/documents/:id', async (req, res) => {
   }
 });
 
+// QUICK TOGGLE Red Flag Status for a Loan
+app.put('/api/loans/:id/flag', async (req, res) => {
+  try {
+    const loanId = req.params.id;
+    const { is_flagged } = req.body || {};
+
+    let targetFlag = 0;
+    if (is_flagged !== undefined && is_flagged !== null) {
+      targetFlag = (is_flagged === true || is_flagged === 1 || is_flagged === '1') ? 1 : 0;
+    } else {
+      const [rows] = await query(`SELECT is_flagged FROM loans WHERE id = ?`, [loanId]);
+      if (rows.length) {
+        targetFlag = rows[0].is_flagged ? 0 : 1;
+      }
+    }
+
+    await query(`UPDATE loans SET is_flagged = ? WHERE id = ?`, [targetFlag, loanId]);
+    res.json({ message: `Loan red flag updated`, is_flagged: targetFlag });
+  } catch (err) {
+    res.status(500).json({ error: sanitizeError(err) });
+  }
+});
+
+// UPDATE Tag Color for a Loan
+app.put('/api/loans/:id/tag-color', async (req, res) => {
+  try {
+    const loanId = req.params.id;
+    const { tag_color } = req.body || {};
+    const color = (tag_color && ['red', 'yellow', 'green'].includes(tag_color.toLowerCase())) ? tag_color.toLowerCase() : null;
+
+    await query(`UPDATE loans SET tag_color = ? WHERE id = ?`, [color, loanId]);
+    res.json({ message: `Loan tag color updated`, tag_color: color });
+  } catch (err) {
+    res.status(500).json({ error: sanitizeError(err) });
+  }
+});
+
 // UPDATE Loan Details & optionally attach documents/photos
 app.put('/api/loans/:id', handleUploadOrJson, async (req, res) => {
   try {
@@ -781,7 +754,10 @@ app.put('/api/loans/:id', handleUploadOrJson, async (req, res) => {
       loan_taker,
       loan_amount,
       payment_mode,
-      date_given
+      date_given,
+      time_given,
+      is_flagged,
+      tag_color
     } = body;
 
     const [loans] = await query(`SELECT * FROM loans WHERE id = ?`, [loanId]);
@@ -795,9 +771,14 @@ app.put('/api/loans/:id', handleUploadOrJson, async (req, res) => {
     const updatedRate = interest_rate !== undefined && interest_rate !== null && interest_rate !== '' ? parseFloat(interest_rate) : loan.interest_rate;
     const updatedTenure = interest_tenure !== undefined && interest_tenure !== null ? interest_tenure : loan.interest_tenure;
     const updatedDateGiven = date_given !== undefined && date_given !== null ? date_given : loan.date_given;
+    const updatedTimeGiven = time_given !== undefined && time_given !== null ? time_given : (loan.time_given || '');
     const updatedReturnDate = return_date !== undefined && return_date !== null ? return_date : loan.return_date;
     const updatedRemark = remark !== undefined && remark !== null ? remark : loan.remark;
     const updatedStatus = status !== undefined && status !== null ? status : loan.status;
+    const updatedIsFlagged = is_flagged !== undefined && is_flagged !== null 
+      ? (is_flagged === true || is_flagged === 1 || is_flagged === '1' ? 1 : 0)
+      : (loan.is_flagged || 0);
+    const updatedTagColor = tag_color !== undefined ? tag_color : (loan.tag_color || null);
 
     // Fetch existing installments to replay loan state with new amount/rate
     const [installments] = await query(`SELECT * FROM installments WHERE loan_id = ? ORDER BY installment_no ASC`, [loanId]);
@@ -815,7 +796,7 @@ app.put('/api/loans/:id', handleUploadOrJson, async (req, res) => {
 
     await query(`
       UPDATE loans
-      SET loan_taker = ?, guarantor_name = ?, loan_amount = ?, current_principal = ?, payment_mode = ?, interest_rate = ?, interest_tenure = ?, date_given = ?, return_date = ?, interest_amount = ?, total_amount = ?, balance_due = ?, status = ?, remark = ?, requires_collateral = ?
+      SET loan_taker = ?, guarantor_name = ?, loan_amount = ?, current_principal = ?, payment_mode = ?, interest_rate = ?, interest_tenure = ?, date_given = ?, time_given = ?, return_date = ?, interest_amount = ?, total_amount = ?, balance_due = ?, status = ?, is_flagged = ?, tag_color = ?, remark = ?, requires_collateral = ?
       WHERE id = ?
     `, [
       updatedLoanTaker, 
@@ -826,11 +807,14 @@ app.put('/api/loans/:id', handleUploadOrJson, async (req, res) => {
       updatedRate, 
       updatedTenure, 
       updatedDateGiven, 
+      updatedTimeGiven,
       updatedReturnDate, 
       state.interestAmount, 
       state.totalAmount, 
       state.balanceDue, 
       state.status, 
+      updatedIsFlagged,
+      updatedTagColor,
       updatedRemark, 
       requiresCollateral, 
       loanId
@@ -867,7 +851,7 @@ app.put('/api/loans/:id', handleUploadOrJson, async (req, res) => {
     res.json({ message: 'Loan updated successfully' });
   } catch (err) {
     console.error('Error updating loan:', err);
-    res.status(500).json({ error: err.message || 'Failed to update loan' });
+    res.status(500).json({ error: sanitizeError(err) });
   }
 });
 
@@ -970,7 +954,6 @@ app.use((req, res) => {
 
 // START SERVER
 initDatabase()
-  .then(() => seedInitialData())
   .then(() => cleanOrphanedRecords())
   .then(() => {
     app.listen(PORT, () => {

@@ -1,6 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { X, ShieldAlert, Upload, Sparkles, DollarSign, Calendar, FileText, Camera, Clock, Zap } from 'lucide-react';
 
+function getCurrentTimeFormatted() {
+  const now = new Date();
+  const hours = String(now.getHours()).padStart(2, '0');
+  const minutes = String(now.getMinutes()).padStart(2, '0');
+  return `${hours}:${minutes}`;
+}
+
 export default function LoanFormModal({ isOpen, onClose, onSubmit, initialData = null }) {
   const [formData, setFormData] = useState({
     loan_taker: '',
@@ -11,8 +18,10 @@ export default function LoanFormModal({ isOpen, onClose, onSubmit, initialData =
     urgent_fee: '',
     interest_tenure: '/Month',
     date_given: new Date().toISOString().split('T')[0],
+    time_given: getCurrentTimeFormatted(),
     return_date: '',
     remark: '',
+    is_flagged: false,
     collateral_item_name: '',
     collateral_description: '',
     collateral_estimated_value: ''
@@ -55,8 +64,10 @@ export default function LoanFormModal({ isOpen, onClose, onSubmit, initialData =
         urgent_fee: initialData.urgent_fee || '',
         interest_tenure: initialData.interest_tenure || '/Month',
         date_given: initialData.date_given || new Date().toISOString().split('T')[0],
+        time_given: initialData.time_given || getCurrentTimeFormatted(),
         return_date: initialData.return_date || '',
         remark: initialData.remark || '',
+        is_flagged: initialData.is_flagged === 1 || initialData.is_flagged === true,
         collateral_item_name: initialData.collaterals?.[0]?.item_name || '',
         collateral_description: initialData.collaterals?.[0]?.description || '',
         collateral_estimated_value: initialData.collaterals?.[0]?.estimated_value || ''
@@ -104,8 +115,10 @@ export default function LoanFormModal({ isOpen, onClose, onSubmit, initialData =
         urgent_fee: '',
         interest_tenure: '/Month',
         date_given: new Date().toISOString().split('T')[0],
+        time_given: getCurrentTimeFormatted(),
         return_date: '',
         remark: '',
+        is_flagged: false,
         collateral_item_name: '',
         collateral_description: '',
         collateral_estimated_value: ''
@@ -606,6 +619,19 @@ export default function LoanFormModal({ isOpen, onClose, onSubmit, initialData =
             </div>
 
             <div className="form-group">
+              <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <Clock size={14} color="#6366f1" />
+                <span>Disbursement Time</span>
+              </label>
+              <input 
+                type="time" 
+                className="form-input"
+                value={formData.time_given}
+                onChange={(e) => setFormData({ ...formData, time_given: e.target.value })}
+              />
+            </div>
+
+            <div className="form-group" style={{ gridColumn: 'span 2' }}>
               <label className="form-label" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span>Promised Return Date</span>
                 {tenureUnit !== 'Custom' && (
